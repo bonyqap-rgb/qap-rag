@@ -8,6 +8,7 @@ import { errorHandler } from "./middlewares/error.middleware.js";
 import { logger } from "./services/logger.service.js";
 import uploadRouter from "./api/upload.js";
 import chatRouter from "./api/chat.js";
+import documentsRouter from "./api/documents.js";
 
 // 1. Startup Logging - Environment validation confirmation
 logger.info(`[STARTUP] Variáveis de ambiente validadas com sucesso. Ambiente: ${env.NODE_ENV}`);
@@ -107,6 +108,7 @@ app.post("/teste", (req, res) => {
 
 app.use("/upload", uploadRouter);
 app.use("/chat", chatRouter);
+app.use("/documents", documentsRouter);
 
 // Enhanced /health endpoint according to requirements
 app.get("/health", async (_, res) => {
