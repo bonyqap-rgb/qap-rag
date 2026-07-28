@@ -1,13 +1,17 @@
-import dotenv from "dotenv";
 import OpenAI from "openai";
-
-dotenv.config();
+import { env } from "../config/env.js";
 
 const client = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY!,
+  apiKey: env.OPENROUTER_API_KEY,
   baseURL: "https://openrouter.ai/api/v1",
 });
 
+/**
+ * Interacts with OpenRouter GPT-4.1-mini model to answer a user's question with provided context.
+ * @param question Question asked by the user
+ * @param context Context string extracted from the vector search
+ * @returns Assistant response string
+ */
 export async function chatWithContext(
   question: string,
   context: string

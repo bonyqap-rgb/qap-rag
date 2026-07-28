@@ -1,32 +1,26 @@
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 
+import { env } from "./config/env.js";
 import { supabase } from "./config/supabase.js";
-import uploadRouter from "./api/upload.js";
-import chatRouter from "./api/chat.js";
+import { requestLogger } from "./middlewares/request-logger.middleware.js";
+import { errorHandler } from "./middlewares/error.middleware.js";
+import { logger } from "./services/logger.service.js";
 
-dotenv.config();
+import uploadRouter from "./routes/upload.route.js";
+import chatRouter from "./routes/chat.route.js";
 
 const app = express();
 
 app.use(cors());
-
 app.use(
   express.json({
     limit: "10mb",
   })
 );
 
-// Middleware para mostrar tudo que chega na API
-app.use((req, _, next) => {
-  console.log("====================================");
-  console.log(`${req.method} ${req.originalUrl}`);
-  console.log("Headers:");
-  console.log(req.headers);
-  console.log("====================================");
-  next();
-});
+// Middleware para mostrar tudo que chega na API (Log customizado centralizado)
+app.use(requestLogger);
 
 // Página temporária para testar upload pelo navegador
 app.get("/upload-test", (_, res) => {
@@ -81,8 +75,7 @@ Enviar PDF
 
 // Endpoint de teste
 app.post("/teste", (req, res) => {
-  console.log("BODY RECEBIDO:");
-  console.log(req.body);
+  logger.info("BODY RECEBIDO:", req.body);
 
   res.json({
     success: true,
@@ -119,8 +112,11 @@ app.get("/health", async (_, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3001;
+// Global error handling middleware
+app.use(errorHandler);
+
+const PORT = env.PORT;
 
 app.listen(PORT, () => {
-  console.log(`🚀 QAP RAG rodando na porta ${PORT}`);
+  logger.info(`🚀 QAP RAG rodando na porta ${PORT}`);
 });

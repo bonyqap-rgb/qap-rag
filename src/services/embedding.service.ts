@@ -1,12 +1,16 @@
-import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
-
-dotenv.config();
+import { env } from "../config/env.js";
+import { logger } from "./logger.service.js";
 
 const ai = new GoogleGenAI({
-  apiKey: process.env.GOOGLE_API_KEY!,
+  apiKey: env.GOOGLE_API_KEY,
 });
 
+/**
+ * Generates an embedding vector for a given piece of text using Google GenAI.
+ * @param text The input string to embed
+ * @returns An array of numbers representing the embedding vector
+ */
 export async function createEmbedding(text: string): Promise<number[]> {
   const response = await ai.models.embedContent({
     model: "gemini-embedding-001",
@@ -19,7 +23,7 @@ export async function createEmbedding(text: string): Promise<number[]> {
     throw new Error("Não foi possível gerar o embedding.");
   }
 
-  console.log("Embedding length:", embedding.length);
+  logger.info(`Embedding length generated: ${embedding.length}`);
 
   return embedding;
 }

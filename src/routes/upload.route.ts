@@ -1,17 +1,17 @@
-import { Router } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
-import { readPdf } from "../pdf/readPdf.js";
-import { createChunks } from "../chunker/createChunks.js";
-import { createEmbedding } from "../gemini/embed.js";
-import { saveKnowledge } from "../services/saveKnowledge.js";
+import { readPdf } from "../services/pdf.service.js";
+import { createChunks } from "../services/chunker.service.js";
+import { createEmbedding } from "../services/embedding.service.js";
+import { saveKnowledge } from "../services/vector.service.js";
+import { logger } from "../services/logger.service.js";
 
 const router = Router();
-
 const upload = multer({
   storage: multer.memoryStorage(),
 });
 
-router.post("/", upload.single("file"), async (req, res) => {
+router.post("/", upload.single("file"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -21,12 +21,10 @@ router.post("/", upload.single("file"), async (req, res) => {
     }
 
     const text = await readPdf(req.file.buffer);
-
     const chunks = createChunks(text);
-
     const embeddings: number[][] = [];
 
-    console.log(`Gerando ${chunks.length} embeddings...`);
+    logger.info(`Gerando ${chunks.length} embeddings...`);
 
     for (const chunk of chunks) {
       embeddings.push(await createEmbedding(chunk));
@@ -47,19 +45,12 @@ router.post("/", upload.single("file"), async (req, res) => {
       embeddings: embeddings.length,
     });
   } catch (error: any) {
-    console.error("=================================");
-    console.error(error);
+    logger.error("Error during PDF knowledge upload execution:", error);
 
-    if (error?.message) console.error(error.message);
-    if (error?.details) console.error(error.details);
-    if (error?.hint) console.error(error.hint);
-    if (error?.code) console.error(error.code);
-
-    console.error("=================================");
-
+    // Maintain exact previous error formatting structure
     return res.status(500).json({
       success: false,
-      error,
+      error: error,
     });
   }
 });
