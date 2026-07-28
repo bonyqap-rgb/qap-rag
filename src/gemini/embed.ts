@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { env } from "../config/env.js";
+import { logger } from "../services/logger.service.js";
 
 const ai = new GoogleGenAI({
   apiKey: env.GOOGLE_API_KEY,
@@ -47,7 +48,7 @@ async function retryWithBackoff<T>(
         throw error;
       }
       const backoffDelay = delayMs * Math.pow(2, attempt - 1);
-      console.warn(`[RETRY] Tentativa ${attempt} falhou. Retentando em ${backoffDelay}ms... Erro: ${error.message || error}`);
+      logger.warn(`[RETRY] Tentativa ${attempt} falhou. Retentando em ${backoffDelay}ms... Erro: ${error.message || error}`);
       await new Promise((resolve) => setTimeout(resolve, backoffDelay));
     }
   }
@@ -69,7 +70,7 @@ export async function createEmbedding(text: string): Promise<number[]> {
 
   // Return cached result if already computed to avoid redundant API queries
   if (embeddingCache.has(normalizedText)) {
-    console.log(`[EMBEDDING CACHE] Retornando vetor em cache para: "${normalizedText.substring(0, 30)}..."`);
+    logger.info(`[EMBEDDING CACHE] Retornando vetor em cache para: "${normalizedText.substring(0, 30)}..."`);
     return embeddingCache.get(normalizedText)!;
   }
 

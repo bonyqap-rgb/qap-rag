@@ -1,4 +1,5 @@
 import { supabase } from "../config/supabase.js";
+import { logger } from "./logger.service.js";
 
 /**
  * Executes a function with exponential backoff retries for database insertion robustness.
@@ -18,7 +19,7 @@ async function retryWithBackoff<T>(
         throw error;
       }
       const backoffDelay = delayMs * Math.pow(2, attempt - 1);
-      console.warn(`[DB RETRY] Tentativa ${attempt} falhou. Retentando em ${backoffDelay}ms... Erro: ${error.message || error}`);
+      logger.warn(`[DB RETRY] Tentativa ${attempt} falhou. Retentando em ${backoffDelay}ms... Erro: ${error.message || error}`);
       await new Promise((resolve) => setTimeout(resolve, backoffDelay));
     }
   }
@@ -63,7 +64,7 @@ export async function saveKnowledge(
     );
 
     if (isDuplicate) {
-      console.log(`[DEDUPLICATE] Pulando trecho duplicado no documento: "${cleanText.substring(0, 30)}..."`);
+      logger.info(`[DEDUPLICATE] Pulando trecho duplicado no documento: "${cleanText.substring(0, 30)}..."`);
       continue;
     }
 
