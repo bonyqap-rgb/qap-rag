@@ -4,3 +4,4 @@ dist
 coverage
 *.log
 storage/
+!storage/documents/.gitkeep
