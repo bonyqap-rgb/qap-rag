@@ -1,8 +1,10 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import { Server } from "http";
 
 import { supabase } from "./config/supabase.js";
+import { errorHandler } from "./middlewares/error.middleware.js";
 import uploadRouter from "./api/upload.js";
 import chatRouter from "./api/chat.js";
 
@@ -119,8 +121,31 @@ app.get("/health", async (_, res) => {
   }
 });
 
+// Registrar o middleware global de tratamento de erros
+app.use(errorHandler);
+
 const PORT = process.env.PORT || 3001;
 
-app.listen(PORT, () => {
+const server: Server = app.listen(PORT, () => {
   console.log(`🚀 QAP RAG rodando na porta ${PORT}`);
 });
+
+// Função para encerrar o servidor de forma graciosa (Graceful Shutdown)
+function handleGracefulShutdown(signal: string) {
+  console.log(`\n[SHUTDOWN] Recebido sinal ${signal}. Iniciando encerramento gracioso...`);
+
+  server.close(() => {
+    console.log("[SHUTDOWN] Conexões ativas fechadas. Servidor Express encerrado.");
+    process.exit(0);
+  });
+
+  // Timeout forçado de segurança para evitar travar o processo indefinidamente
+  setTimeout(() => {
+    console.warn("[SHUTDOWN] Forçando saída após timeout de segurança.");
+    process.exit(1);
+  }, 10000);
+}
+
+// Configuração de ouvintes para encerramento gracioso
+process.on("SIGINT", () => handleGracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => handleGracefulShutdown("SIGTERM"));

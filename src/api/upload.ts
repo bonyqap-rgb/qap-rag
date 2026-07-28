@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
 import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
@@ -11,7 +11,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
 });
 
-router.post("/", upload.single("file"), async (req, res) => {
+router.post("/", upload.single("file"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -47,20 +47,8 @@ router.post("/", upload.single("file"), async (req, res) => {
       embeddings: embeddings.length,
     });
   } catch (error: any) {
-    console.error("=================================");
-    console.error(error);
-
-    if (error?.message) console.error(error.message);
-    if (error?.details) console.error(error.details);
-    if (error?.hint) console.error(error.hint);
-    if (error?.code) console.error(error.code);
-
-    console.error("=================================");
-
-    return res.status(500).json({
-      success: false,
-      error,
-    });
+    // Encaminha o erro para o middleware global centralizado
+    next(error);
   }
 });
 

@@ -4,29 +4,51 @@
 
 Este é o backend do QAP RAG, um sistema de Retrieval-Augmented Generation (RAG) desenvolvido em TypeScript/Node.js ES module utilizando Express e Supabase.
 
-O pipeline de RAG (PDF parsing, chunking, embeddings, vector search e prompt/chat completions) foi totalmente refatorado com melhorias técnicas significativas que aumentam a precisão do contexto retornado e a clareza do código, mantendo o comportamento das APIs externas rigorosamente idêntico.
+---
+
+## 🛠️ Tratamento de Erros Padronizado e Encerramento Gracioso
+
+Para garantir a robustez de nível empresarial, foram adicionadas melhorias significativas no tratamento de erros da API e no ciclo de vida do servidor Express.
+
+### 1. Esquema de Erros Unificado (`src/middlewares/error.middleware.ts`)
+- Todas as rotas de API (`/upload`, `/chat`) agora encaminham exceções para o middleware centralizado de erros através do callback `next(error)`.
+- O middleware intercepta os erros e retorna uma resposta JSON contendo o seguinte esquema estruturado:
+  ```json
+  {
+    "error": "ERROR",
+    "timestamp": "2026-07-28T16:32:00.000Z",
+    "request": {
+      "method": "POST",
+      "headers": { ... },
+      "body": { ... }
+    },
+    "stack": "Error: ...\n    at ...",
+    "message": "Mensagem detalhada do erro.",
+    "route": "/chat"
+  }
+  ```
+
+### 2. Encerramento Gracioso (Graceful Shutdown)
+- Implementamos ouvintes de sinal para encerramento limpo do processo do sistema no arquivo `src/index.ts`:
+  - `process.on("SIGINT", ...)` (geralmente gerado por `Ctrl+C` localmente)
+  - `process.on("SIGTERM", ...)` (geralmente gerado por orquestradores de container em produção)
+- Ao receber esses sinais, o servidor interrompe o recebimento de novas conexões HTTP e fecha de forma limpa as conexões ativas pendentes antes de sair, assegurando que requisições em andamento não sejam cortadas abruptamente.
 
 ---
 
-## 🛠️ Melhorias no Pipeline de RAG
+## 🧪 Testes Automatizados e Integração Contínua (CI)
 
-O pipeline principal do RAG recebeu as seguintes otimizações:
+Para garantir a estabilidade do código a cada nova alteração, foram integrados testes automatizados e um fluxo de integração contínua (CI).
 
-### 1. Parsing de PDF Aprimorado (`src/pdf/readPdf.ts`)
-- Normalização robusta de múltiplos espaços em branco, novas linhas e tabs consecutivos para assegurar que os trechos fiquem limpos antes de serem enviados ao chunker ou gerador de embeddings.
+### 1. Testes Automatizados
+- Os testes são executados utilizando o runner nativo do Node.js (`node:test`) integrado com `tsx`.
+- Para rodar os testes localmente:
+  ```bash
+  npm test
+  ```
 
-### 2. Estratégia de Chunking Inteligente baseada em Limites (`src/chunker/createChunks.ts`)
-- O mecanismo original fatiaria os textos de forma cega por limite de caracteres, dividindo palavras ou frases ao meio.
-- A nova implementação busca por limites naturais próximos ao fim de cada bloco (como espaços ` `, ou quebras de linha `\n`) em uma janela de busca inteligente de 80 caracteres. Isso evita cortar termos cruciais, melhorando drasticamente a relevância semântica das buscas vetoriais.
-
-### 3. Embeddings Robustos (`src/gemini/embed.ts`)
-- Validação explícita de entradas não vazias antes de enviar conteúdo à API do Gemini e log estruturado da resposta de dimensões geradas.
-
-### 4. Pesquisa e Inserção Vetorial Tipadas (`src/services/saveKnowledge.ts` & `src/vector/search.ts`)
-- Introdução de interfaces TypeScript explícitas (ex: `MatchedDocument`) e validações de correspondência entre o número de chunks e o número de embeddings antes de realizar a persistência no Supabase.
-
-### 5. Construção Unificada de Prompts (`src/gemini/chat.ts`)
-- Definição estruturada de instruções de sistema e layouts de prompt, garantindo que o OpenRouter (GPT-4.1-mini) receba as perguntas e o contexto formatados de maneira previsível.
+### 2. Integração Contínua (CI) via GitHub Actions
+- O pipeline `.github/workflows/ci.yml` roda a cada push e pull request para verificar a saúde do projeto e o sucesso dos testes.
 
 ---
 
