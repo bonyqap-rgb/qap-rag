@@ -1,12 +1,30 @@
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
+import { Server } from "http";
 
+import { env } from "./config/env.js";
 import { supabase } from "./config/supabase.js";
+import { errorHandler } from "./middlewares/error.middleware.js";
+import { logger } from "./services/logger.service.js";
 import uploadRouter from "./api/upload.js";
 import chatRouter from "./api/chat.js";
 
-dotenv.config();
+// 1. Startup Logging - Environment validation confirmation
+logger.info(`[STARTUP] Variáveis de ambiente validadas com sucesso. Ambiente: ${env.NODE_ENV}`);
+
+// 2. Startup Logging - Gemini initialization check
+if (env.GOOGLE_API_KEY) {
+  logger.info("[STARTUP] Gemini SDK inicializado e pronto.");
+} else {
+  logger.warn("[STARTUP] Alerta: GOOGLE_API_KEY não foi configurado.");
+}
+
+// 3. Startup Logging - Supabase connection check
+if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
+  logger.info("[STARTUP] Cliente Supabase inicializado e pronto.");
+} else {
+  logger.warn("[STARTUP] Alerta: Credenciais do Supabase não configuradas.");
+}
 
 const app = express();
 
@@ -18,13 +36,12 @@ app.use(
   })
 );
 
-// Middleware para mostrar tudo que chega na API
+// Middleware de Logs de requisições estruturado
 app.use((req, _, next) => {
-  console.log("====================================");
-  console.log(`${req.method} ${req.originalUrl}`);
-  console.log("Headers:");
-  console.log(req.headers);
-  console.log("====================================");
+  logger.info(`[REQUEST] ${req.method} ${req.originalUrl}`, {
+    method: req.method,
+    route: req.originalUrl,
+  });
   next();
 });
 
@@ -81,9 +98,7 @@ Enviar PDF
 
 // Endpoint de teste
 app.post("/teste", (req, res) => {
-  console.log("BODY RECEBIDO:");
-  console.log(req.body);
-
+  logger.info("BODY RECEBIDO via endpoint de teste");
   res.json({
     success: true,
     body: req.body,
@@ -93,7 +108,11 @@ app.post("/teste", (req, res) => {
 app.use("/upload", uploadRouter);
 app.use("/chat", chatRouter);
 
+// Enhanced /health endpoint according to requirements
 app.get("/health", async (_, res) => {
+  let databaseConnected = false;
+  let dbErrorMsg: string | null = null;
+
   try {
     const { error } = await supabase
       .from("knowledge_documents")
@@ -101,26 +120,55 @@ app.get("/health", async (_, res) => {
       .limit(1);
 
     if (error) {
-      return res.status(500).json({
-        status: "error",
-        message: error.message,
-      });
+      dbErrorMsg = error.message;
+    } else {
+      databaseConnected = true;
     }
-
-    return res.json({
-      status: "ok",
-      message: "Conectado ao Supabase com sucesso!",
-    });
   } catch (error) {
-    return res.status(500).json({
-      status: "error",
-      message: error instanceof Error ? error.message : String(error),
-    });
+    dbErrorMsg = error instanceof Error ? error.message : String(error);
   }
+
+  const healthData = {
+    serviceName: "qap-rag",
+    version: "1.0.0",
+    status: databaseConnected ? "ok" : "error",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    environment: env.NODE_ENV,
+    supabase: {
+      connected: databaseConnected,
+      error: dbErrorMsg,
+    },
+  };
+
+  const responseStatus = databaseConnected ? 200 : 500;
+  return res.status(responseStatus).json(healthData);
 });
 
-const PORT = process.env.PORT || 3001;
+// Global error handling middleware
+app.use(errorHandler);
 
-app.listen(PORT, () => {
-  console.log(`🚀 QAP RAG rodando na porta ${PORT}`);
+const PORT = env.PORT;
+
+const server: Server = app.listen(PORT, () => {
+  logger.info(`[STARTUP] QAP RAG ativo e escutando na porta: ${PORT}`);
 });
+
+// Graceful Shutdown implementation
+function handleGracefulShutdown(signal: string) {
+  logger.info(`[SHUTDOWN] Recebido sinal ${signal}. Iniciando encerramento gracioso...`);
+
+  server.close(() => {
+    logger.info("[SHUTDOWN] Servidor Express encerrado com sucesso.");
+    process.exit(0);
+  });
+
+  // Timeout de fallback para evitar travar o processo
+  setTimeout(() => {
+    logger.warn("[SHUTDOWN] Forçando término após timeout de segurança de 10s.");
+    process.exit(1);
+  }, 10000);
+}
+
+process.on("SIGINT", () => handleGracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => handleGracefulShutdown("SIGTERM"));
