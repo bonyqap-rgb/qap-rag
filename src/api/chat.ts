@@ -1,12 +1,11 @@
-import { Router } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { createEmbedding } from "../gemini/embed.js";
 import { searchKnowledge } from "../vector/search.js";
 import { chatWithContext } from "../gemini/chat.js";
-import { logger } from "../config/logger.js";
 
 const router = Router();
 
-router.post("/", async (req, res) => {
+router.post("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { question } = req.body;
 
@@ -38,20 +37,8 @@ router.post("/", async (req, res) => {
     });
 
   } catch (error) {
-    logger.error("Error inside chat route:", error);
-
-    if (error instanceof Error) {
-      return res.status(500).json({
-        success: false,
-        error: error.message,
-        stack: error.stack,
-      });
-    }
-
-    return res.status(500).json({
-      success: false,
-      error: String(error),
-    });
+    // Forward the error to the centralized error middleware
+    next(error);
   }
 });
 

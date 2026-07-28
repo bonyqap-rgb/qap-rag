@@ -1,11 +1,14 @@
 import express from "express";
 import cors from "cors";
+import dotenv from "dotenv";
 
-import { env } from "./config/env.js";
 import { supabase } from "./config/supabase.js";
-import { logger } from "./config/logger.js";
+import { requestLogger } from "./middlewares/request-logger.middleware.js";
+import { errorHandler } from "./middlewares/error.middleware.js";
 import uploadRouter from "./api/upload.js";
 import chatRouter from "./api/chat.js";
+
+dotenv.config();
 
 const app = express();
 
@@ -17,15 +20,8 @@ app.use(
   })
 );
 
-// Middleware para mostrar tudo que chega na API (usando logger reutilizável)
-app.use((req, _, next) => {
-  logger.info("====================================");
-  logger.info(`${req.method} ${req.originalUrl}`);
-  logger.info("Headers:");
-  logger.info(JSON.stringify(req.headers));
-  logger.info("====================================");
-  next();
-});
+// Centralized request logging middleware
+app.use(requestLogger);
 
 // Página temporária para testar upload pelo navegador
 app.get("/upload-test", (_, res) => {
@@ -80,8 +76,8 @@ Enviar PDF
 
 // Endpoint de teste
 app.post("/teste", (req, res) => {
-  logger.info("BODY RECEBIDO:");
-  logger.info(JSON.stringify(req.body));
+  console.log("BODY RECEBIDO:");
+  console.log(req.body);
 
   res.json({
     success: true,
@@ -118,8 +114,11 @@ app.get("/health", async (_, res) => {
   }
 });
 
-const PORT = env.PORT;
+// Centralized global error handling middleware
+app.use(errorHandler);
+
+const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, () => {
-  logger.info(`🚀 QAP RAG rodando na porta ${PORT}`);
+  console.log(`🚀 QAP RAG rodando na porta ${PORT}`);
 });

@@ -1,10 +1,9 @@
-import { Router } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
 import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
 import { createEmbedding } from "../gemini/embed.js";
 import { saveKnowledge } from "../services/saveKnowledge.js";
-import { logger } from "../config/logger.js";
 
 const router = Router();
 
@@ -12,7 +11,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
 });
 
-router.post("/", upload.single("file"), async (req, res) => {
+router.post("/", upload.single("file"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -27,7 +26,7 @@ router.post("/", upload.single("file"), async (req, res) => {
 
     const embeddings: number[][] = [];
 
-    logger.info(`Gerando ${chunks.length} embeddings...`);
+    console.log(`Gerando ${chunks.length} embeddings...`);
 
     for (const chunk of chunks) {
       embeddings.push(await createEmbedding(chunk));
@@ -48,12 +47,8 @@ router.post("/", upload.single("file"), async (req, res) => {
       embeddings: embeddings.length,
     });
   } catch (error: any) {
-    logger.error("Error inside upload route:", error);
-
-    return res.status(500).json({
-      success: false,
-      error,
-    });
+    // Forward the error to the centralized error middleware
+    next(error);
   }
 });
 

@@ -1,8 +1,10 @@
+import dotenv from "dotenv";
 import OpenAI from "openai";
-import { env } from "../config/env.js";
+
+dotenv.config();
 
 const client = new OpenAI({
-  apiKey: env.OPENROUTER_API_KEY,
+  apiKey: process.env.OPENROUTER_API_KEY!,
   baseURL: "https://openrouter.ai/api/v1",
 });
 
