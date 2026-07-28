@@ -83,9 +83,93 @@ O fluxo de processamento e recuperação semântica de documentos do sistema seg
 
 ---
 
+## 📂 Módulo de Gerenciamento de Documentos (Document Management)
+
+Este módulo fornece uma base sólida e fortemente tipada para o gerenciamento de metadados de documentos no banco de dados Supabase, servindo como fundação para o processamento de novos arquivos.
+
+### 📋 Endpoints da API
+
+#### 1. Listar Documentos (`GET /documents`)
+Retorna uma lista contendo todos os documentos cadastrados no banco de dados, ordenados por data de criação de forma decrescente.
+- **Resposta de Sucesso (`200 OK`)**:
+  ```json
+  [
+    {
+      "id": "8c77be02-4ee3-455b-80df-67993a4bc4d4",
+      "title": "Manual de Procedimentos da PM",
+      "category": "Segurança Pública",
+      "version": "1.2.0",
+      "source": "Secretaria de Segurança",
+      "language": "pt-BR",
+      "filename": "manual_procedimentos.pdf",
+      "fileSize": 102400,
+      "mimeType": "application/pdf",
+      "totalPages": 45,
+      "processingStatus": "completed",
+      "createdAt": "2023-10-10T12:00:00Z",
+      "updatedAt": "2023-10-10T12:00:00Z"
+    }
+  ]
+  ```
+
+#### 2. Obter Detalhes de um Documento (`GET /documents/:id`)
+Recupera os metadados de um documento específico através do seu ID (UUID).
+- **Parâmetros de Rota**:
+  - `id` (UUID): ID do documento a ser buscado.
+- **Resposta de Sucesso (`200 OK`)**: Retorna o objeto do documento solicitado.
+- **Resposta de Erro (`404 Not Found`)**:
+  ```json
+  {
+    "error": "ERROR",
+    "timestamp": "2023-10-10T12:05:00Z",
+    "message": "Documento com ID '...' não encontrado.",
+    "route": "/documents/..."
+  }
+  ```
+
+#### 3. Cadastrar Metadados de Documento (`POST /documents`)
+Cadastra um novo registro de metadados para um documento.
+- **Corpo da Requisição (JSON)**:
+  - `title` (obrigatório, string, máx 255 caracteres): Título amigável do documento.
+  - `category` (obrigatório, string): Categoria do documento.
+  - `version` (obrigatório, string, formato `x.y` ou `x.y.z`): Versão do documento.
+  - `source` (obrigatório, string): Fonte do documento.
+  - `language` (obrigatório, string): Idioma do documento.
+  - `filename` (obrigatório, string): Nome do arquivo físico associado.
+  - `fileSize` (obrigatório, número positivo): Tamanho do arquivo em bytes.
+  - `mimeType` (obrigatório, string): Tipo MIME do arquivo (ex: `application/pdf`).
+  - `totalPages` (obrigatório, número positivo): Total de páginas do arquivo.
+  - `processingStatus` (opcional, padrão `'pending'`): Status do processamento (`pending`, `processing`, `completed`, `failed`).
+- **Resposta de Sucesso (`201 Created`)**: Retorna o documento criado com ID gerado e timestamps.
+- **Resposta de Erro (`400 Bad Request`)**: Erro de validação se algum campo obrigatório estiver ausente ou inválido.
+
+#### 4. Atualizar Metadados de Documento (`PATCH /documents/:id`)
+Atualiza parcialmente os metadados de um documento existente.
+- **Parâmetros de Rota**:
+  - `id` (UUID): ID do documento.
+- **Corpo da Requisição (JSON)**: Qualquer um dos campos opcionais permitidos para modificação (ex: `title`, `category`, `version`, `source`, `language`, `processingStatus`).
+- **Resposta de Sucesso (`200 OK`)**: Retorna o documento atualizado.
+- **Resposta de Erro (`400 Bad Request`)**: Se algum dado de atualização violar as restrições de validação.
+- **Resposta de Erro (`404 Not Found`)**: Se o documento com o ID especificado não for encontrado.
+
+#### 5. Excluir Documento (`DELETE /documents/:id`)
+Exclui permanentemente o registro de um documento do banco de dados.
+- **Parâmetros de Rota**:
+  - `id` (UUID): ID do documento.
+- **Resposta de Sucesso (`200 OK`)**:
+  ```json
+  {
+    "success": true,
+    "message": "Documento excluído com sucesso."
+  }
+  ```
+- **Resposta de Erro (`404 Not Found`)**: Se o documento não for encontrado.
+
+---
+
 ## 🧪 Testes Automatizados
 
-A suíte de testes unitários integrada sob o runner nativo do Node.js cobre as lógicas cruciais de chunking e marcações semânticas de página.
+A suíte de testes unitários integrada sob o runner nativo do Node.js cobre as lógicas cruciais de chunking, marcações semânticas de página, regras de repositório, validações do serviço de documentos e as rotas de API Express.
 Para executar localmente:
 ```bash
 npm test
