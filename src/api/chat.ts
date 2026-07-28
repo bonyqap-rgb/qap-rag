@@ -1,11 +1,11 @@
-import { Router, Request, Response, NextFunction } from "express";
+import { Router } from "express";
 import { createEmbedding } from "../gemini/embed.js";
 import { searchKnowledge } from "../vector/search.js";
 import { chatWithContext } from "../gemini/chat.js";
 
 const router = Router();
 
-router.post("/", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/", async (req, res) => {
   try {
     const { question } = req.body;
 
@@ -37,8 +37,20 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
     });
 
   } catch (error) {
-    // Forward the error to the centralized error middleware
-    next(error);
+    console.error(error);
+
+    if (error instanceof Error) {
+      return res.status(500).json({
+        success: false,
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      error: String(error),
+    });
   }
 });
 

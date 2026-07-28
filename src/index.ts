@@ -3,8 +3,6 @@ import cors from "cors";
 import dotenv from "dotenv";
 
 import { supabase } from "./config/supabase.js";
-import { requestLogger } from "./middlewares/request-logger.middleware.js";
-import { errorHandler } from "./middlewares/error.middleware.js";
 import uploadRouter from "./api/upload.js";
 import chatRouter from "./api/chat.js";
 
@@ -20,8 +18,15 @@ app.use(
   })
 );
 
-// Centralized request logging middleware
-app.use(requestLogger);
+// Middleware para mostrar tudo que chega na API
+app.use((req, _, next) => {
+  console.log("====================================");
+  console.log(`${req.method} ${req.originalUrl}`);
+  console.log("Headers:");
+  console.log(req.headers);
+  console.log("====================================");
+  next();
+});
 
 // Página temporária para testar upload pelo navegador
 app.get("/upload-test", (_, res) => {
@@ -113,9 +118,6 @@ app.get("/health", async (_, res) => {
     });
   }
 });
-
-// Centralized global error handling middleware
-app.use(errorHandler);
 
 const PORT = process.env.PORT || 3001;
 

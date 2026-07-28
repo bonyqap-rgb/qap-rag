@@ -1,4 +1,4 @@
-import { Router, Request, Response, NextFunction } from "express";
+import { Router } from "express";
 import multer from "multer";
 import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
@@ -11,7 +11,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
 });
 
-router.post("/", upload.single("file"), async (req: Request, res: Response, next: NextFunction) => {
+router.post("/", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -47,8 +47,20 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       embeddings: embeddings.length,
     });
   } catch (error: any) {
-    // Forward the error to the centralized error middleware
-    next(error);
+    console.error("=================================");
+    console.error(error);
+
+    if (error?.message) console.error(error.message);
+    if (error?.details) console.error(error.details);
+    if (error?.hint) console.error(error.hint);
+    if (error?.code) console.error(error.code);
+
+    console.error("=================================");
+
+    return res.status(500).json({
+      success: false,
+      error,
+    });
   }
 });
 
