@@ -3,24 +3,29 @@ import cors from "cors";
 
 import { env } from "./config/env.js";
 import { supabase } from "./config/supabase.js";
-import { requestLogger } from "./middlewares/request-logger.middleware.js";
-import { errorHandler } from "./middlewares/error.middleware.js";
-import { logger } from "./services/logger.service.js";
-
-import uploadRouter from "./routes/upload.route.js";
-import chatRouter from "./routes/chat.route.js";
+import { logger } from "./config/logger.js";
+import uploadRouter from "./api/upload.js";
+import chatRouter from "./api/chat.js";
 
 const app = express();
 
 app.use(cors());
+
 app.use(
   express.json({
     limit: "10mb",
   })
 );
 
-// Middleware para mostrar tudo que chega na API (Log customizado centralizado)
-app.use(requestLogger);
+// Middleware para mostrar tudo que chega na API (usando logger reutilizável)
+app.use((req, _, next) => {
+  logger.info("====================================");
+  logger.info(`${req.method} ${req.originalUrl}`);
+  logger.info("Headers:");
+  logger.info(JSON.stringify(req.headers));
+  logger.info("====================================");
+  next();
+});
 
 // Página temporária para testar upload pelo navegador
 app.get("/upload-test", (_, res) => {
@@ -75,7 +80,8 @@ Enviar PDF
 
 // Endpoint de teste
 app.post("/teste", (req, res) => {
-  logger.info("BODY RECEBIDO:", req.body);
+  logger.info("BODY RECEBIDO:");
+  logger.info(JSON.stringify(req.body));
 
   res.json({
     success: true,
@@ -111,9 +117,6 @@ app.get("/health", async (_, res) => {
     });
   }
 });
-
-// Global error handling middleware
-app.use(errorHandler);
 
 const PORT = env.PORT;
 

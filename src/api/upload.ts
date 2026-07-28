@@ -1,17 +1,18 @@
-import { Router, Request, Response, NextFunction } from "express";
+import { Router } from "express";
 import multer from "multer";
-import { readPdf } from "../services/pdf.service.js";
-import { createChunks } from "../services/chunker.service.js";
-import { createEmbedding } from "../services/embedding.service.js";
-import { saveKnowledge } from "../services/vector.service.js";
-import { logger } from "../services/logger.service.js";
+import { readPdf } from "../pdf/readPdf.js";
+import { createChunks } from "../chunker/createChunks.js";
+import { createEmbedding } from "../gemini/embed.js";
+import { saveKnowledge } from "../services/saveKnowledge.js";
+import { logger } from "../config/logger.js";
 
 const router = Router();
+
 const upload = multer({
   storage: multer.memoryStorage(),
 });
 
-router.post("/", upload.single("file"), async (req: Request, res: Response, next: NextFunction) => {
+router.post("/", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -21,7 +22,9 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
     }
 
     const text = await readPdf(req.file.buffer);
+
     const chunks = createChunks(text);
+
     const embeddings: number[][] = [];
 
     logger.info(`Gerando ${chunks.length} embeddings...`);
@@ -45,12 +48,11 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       embeddings: embeddings.length,
     });
   } catch (error: any) {
-    logger.error("Error during PDF knowledge upload execution:", error);
+    logger.error("Error inside upload route:", error);
 
-    // Maintain exact previous error formatting structure
     return res.status(500).json({
       success: false,
-      error: error,
+      error,
     });
   }
 });

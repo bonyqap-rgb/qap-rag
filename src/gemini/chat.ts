@@ -6,12 +6,6 @@ const client = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
 });
 
-/**
- * Interacts with OpenRouter GPT-4.1-mini model to answer a user's question with provided context.
- * @param question Question asked by the user
- * @param context Context string extracted from the vector search
- * @returns Assistant response string
- */
 export async function chatWithContext(
   question: string,
   context: string

@@ -1,12 +1,12 @@
-import { Router, Request, Response, NextFunction } from "express";
-import { createEmbedding } from "../services/embedding.service.js";
-import { searchKnowledge } from "../services/vector.service.js";
-import { chatWithContext } from "../services/chat.service.js";
-import { logger } from "../services/logger.service.js";
+import { Router } from "express";
+import { createEmbedding } from "../gemini/embed.js";
+import { searchKnowledge } from "../vector/search.js";
+import { chatWithContext } from "../gemini/chat.js";
+import { logger } from "../config/logger.js";
 
 const router = Router();
 
-router.post("/", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/", async (req, res) => {
   try {
     const { question } = req.body;
 
@@ -36,8 +36,9 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
       answer,
       documents: documents.length,
     });
+
   } catch (error) {
-    logger.error("Error during context chat completion request:", error);
+    logger.error("Error inside chat route:", error);
 
     if (error instanceof Error) {
       return res.status(500).json({
