@@ -1,10 +1,9 @@
-import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
-
-dotenv.config();
+import { env } from "../config/env.js";
+import { logger } from "../services/logger.service.js";
 
 const ai = new GoogleGenAI({
-  apiKey: process.env.GOOGLE_API_KEY!,
+  apiKey: env.GOOGLE_API_KEY,
 });
 
 export async function createEmbedding(text: string): Promise<number[]> {
@@ -19,7 +18,7 @@ export async function createEmbedding(text: string): Promise<number[]> {
     throw new Error("Não foi possível gerar o embedding.");
   }
 
-  console.log("Embedding length:", embedding.length);
+  logger.info(`Embedding generated with length: ${embedding.length}`);
 
   return embedding;
 }

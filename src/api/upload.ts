@@ -4,6 +4,7 @@ import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
 import { createEmbedding } from "../gemini/embed.js";
 import { saveKnowledge } from "../services/saveKnowledge.js";
+import { logger } from "../services/logger.service.js";
 
 const router = Router();
 
@@ -26,7 +27,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
 
     const embeddings: number[][] = [];
 
-    console.log(`Gerando ${chunks.length} embeddings...`);
+    logger.info(`Gerando ${chunks.length} embeddings...`);
 
     for (const chunk of chunks) {
       embeddings.push(await createEmbedding(chunk));
@@ -47,7 +48,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       embeddings: embeddings.length,
     });
   } catch (error: any) {
-    // Encaminha o erro para o middleware global centralizado
+    // Pass to central error middleware instead of handling locally
     next(error);
   }
 });

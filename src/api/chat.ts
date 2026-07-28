@@ -37,7 +37,7 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
     });
 
   } catch (error) {
-    // Encaminha o erro para o middleware global centralizado
+    // Pass to central error middleware instead of handling locally
     next(error);
   }
 });
