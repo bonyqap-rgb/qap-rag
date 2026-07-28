@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
 import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
@@ -11,7 +11,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
 });
 
-router.post("/", upload.single("file"), async (req, res) => {
+router.post("/", upload.single("file"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -20,18 +20,22 @@ router.post("/", upload.single("file"), async (req, res) => {
       });
     }
 
+    // 1. Parsing robusto de PDF com limpeza e formatação de marcações
     const text = await readPdf(req.file.buffer);
 
+    // 2. Fatiamento inteligente em chunks com conhecimento semântico e tracking de página
     const chunks = createChunks(text);
 
     const embeddings: number[][] = [];
 
-    console.log(`Gerando ${chunks.length} embeddings...`);
+    console.log(`[UPLOAD] Gerando ${chunks.length} embeddings para o documento: ${req.file.originalname}`);
 
+    // 3. Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
     for (const chunk of chunks) {
       embeddings.push(await createEmbedding(chunk));
     }
 
+    // 4. Salvamento unificado com deduplicação de vetores e injeção de metadados
     const documentId = await saveKnowledge(
       req.file.originalname,
       chunks,
@@ -47,20 +51,7 @@ router.post("/", upload.single("file"), async (req, res) => {
       embeddings: embeddings.length,
     });
   } catch (error: any) {
-    console.error("=================================");
-    console.error(error);
-
-    if (error?.message) console.error(error.message);
-    if (error?.details) console.error(error.details);
-    if (error?.hint) console.error(error.hint);
-    if (error?.code) console.error(error.code);
-
-    console.error("=================================");
-
-    return res.status(500).json({
-      success: false,
-      error,
-    });
+    next(error);
   }
 });
 
