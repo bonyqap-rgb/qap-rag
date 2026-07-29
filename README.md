@@ -222,3 +222,135 @@ docker run -p 3001:3001 \
 ### 2. Monitoramento de Liveness e Readiness
 - Configure probes de liveness em `/health` para garantir que o processo está respondendo.
 - Configure probes de readiness em `/ready` para garantir que o contêiner só passe a receber tráfego se as conexões com o Supabase e as APIs de LLM estiverem plenamente operacionais.
+
+---
+
+## 🛠️ Recursos de Administração, Observabilidade e Monitoramento
+
+O sistema conta com endpoints administrativos dedicados para facilitar a operação, manutenção, auditoria de performance e diagnóstico de saúde operacional do ecossistema de RAG.
+
+### 1. Painel de Métricas Operacionais
+
+#### `GET /metrics`
+Expõe dados operacionais, performance de requisições e consumo de hardware para fácil integração com o Prometheus ou Grafana.
+
+- **Resposta (`200 OK` - Exemplo de Payload)**:
+```json
+{
+  "uptime": 3600.45,
+  "versao": "1.0.0",
+  "ambiente": "production",
+  "memoria_utilizada": {
+    "rss": 124313600,
+    "heapTotal": 83451904,
+    "heapUsed": 45123904,
+    "external": 1423400
+  },
+  "uso_cpu": {
+    "user": 125000,
+    "system": 45000
+  },
+  "tempo_medio_requisicoes_ms": 142.35,
+  "numero_total_requisicoes": 1052,
+  "quantidade_erros": 3,
+  "quantidade_chats_executados": 425,
+  "quantidade_buscas_rag": 622,
+  "quantidade_documentos_indexados": 12
+}
+```
+
+---
+
+### 2. Estatísticas da Base de Conhecimento
+
+#### `GET /documents/stats`
+Exibe métricas calculadas em tempo real (com lógica PostgreSQL otimizada ou fallback dinâmico) sobre o volume e o tamanho dos dados armazenados vetorialmente.
+
+- **Resposta (`200 OK` - Exemplo de Payload)**:
+```json
+{
+  "total_documentos": 15,
+  "documentos_indexados": 12,
+  "documentos_pendentes": 3,
+  "total_chunks": 452,
+  "media_chunks_por_documento": 37.67,
+  "tamanho_medio_chunks": 412.55,
+  "data_ultima_indexacao": "2026-07-29T18:40:00.000Z",
+  "quantidade_vetores_armazenados": 452
+}
+```
+
+---
+
+### 3. Histórico de Operações de Indexação
+
+#### `GET /documents/history`
+Retorna a listagem completa (ordenada de forma decrescente por data) contendo o histórico de indexação de arquivos para auditoria.
+
+- **Resposta (`200 OK` - Exemplo de Payload)**:
+```json
+[
+  {
+    "id": "76993a4b-c4d4-4ee3-455b-8c77be024ee3",
+    "document": "manual_pm.pdf",
+    "date": "2026-07-29T18:40:00.000Z",
+    "duration": 4820,
+    "chunks_count": 42,
+    "embeddings_count": 42,
+    "success": true
+  },
+  {
+    "id": "bc77be02-4ee3-455b-80df-67993a4bc4d4",
+    "document": "regula_policia.pdf",
+    "date": "2026-07-29T18:35:10.000Z",
+    "duration": 1200,
+    "chunks_count": 0,
+    "embeddings_count": 0,
+    "success": false,
+    "error_message": "Falha na decodificação do PDF: buffer vazio"
+  }
+]
+```
+
+---
+
+### 4. Reindexação de Documentos
+
+#### `POST /documents/:id/reindex`
+Força a reindexação de um documento existente pelo seu ID. Remove os vetores antigos do banco e recria todos os embeddings chamando as APIs de IA contratadas em uma transação segura e idempotente.
+
+- **Resposta (`200 OK` - Exemplo de Payload)**:
+```json
+{
+  "success": true,
+  "message": "Documento reindexado com sucesso.",
+  "chunksCount": 42,
+  "durationMs": 3540
+}
+```
+
+---
+
+### 5. Exclusão Segura de Documentos
+
+#### `DELETE /documents/:id`
+Remove com segurança todos os dados associados a um documento (metadados na tabela `documents`, documento na tabela `knowledge_documents` e todos os blocos na tabela `knowledge_chunks` com seus respectivos vetores) encapsulados em uma transação atômica que previne dados órfãos.
+
+- **Resposta (`200 OK` - Exemplo de Payload)**:
+```json
+{
+  "success": true,
+  "message": "Documento excluído com sucesso."
+}
+```
+
+---
+
+### 6. Políticas de Logs Administrativos e LGPD
+
+Todos os endpoints operacionais e administrativos contam com logs detalhados estruturados.
+- **Formato**:
+  `[2026-07-29T18:40:00.000Z] [INFO] [reqId=uuid extra={"duration":15.5,"status":"success"}] [ADMIN] Documento reindexado com sucesso`
+- **LGPD & Segurança**:
+  - Chaves de API nunca são expostas ou salvas nos arquivos de log.
+  - Prompts do usuário, perguntas (`message` / `question`) e textos de busca (`query`) são inteiramente omitidos ou omitidos por máscara (`[REDACTED]`) no arquivo de log de produção.

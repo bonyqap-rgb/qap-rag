@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import { logger } from "../services/logger.service.js";
+import { metricsService } from "../services/metrics.service.js";
 
 /**
  * Standard HTTP Request structured logger middleware.
@@ -8,6 +9,9 @@ import { logger } from "../services/logger.service.js";
  */
 export function requestLogger(req: Request, res: Response, next: NextFunction) {
   const start = performance.now();
+
+  // Increment total request metric
+  metricsService.incrementRequests();
 
   // Ensure requestId exists
   const requestId = (req.headers["x-request-id"] || req.headers["x-correlation-id"] || crypto.randomUUID()) as string;
@@ -17,6 +21,9 @@ export function requestLogger(req: Request, res: Response, next: NextFunction) {
   // We capture response finished event to log status and duration
   res.on("finish", () => {
     const duration = parseFloat((performance.now() - start).toFixed(2));
+
+    // Add to request time metrics
+    metricsService.addRequestTime(duration);
 
     // Safety check: Sanitise potential prompt / answer in body/query or log purely meta
     // Never log full prompts, full answers or API keys!

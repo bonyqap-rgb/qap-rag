@@ -2,6 +2,7 @@ import { supabase } from "../config/supabase.js";
 import { env } from "../config/env.js";
 import { createEmbedding } from "../gemini/embed.js";
 import { logger } from "./logger.service.js";
+import { metricsService } from "./metrics.service.js";
 
 export interface SearchFilters {
   documentId?: string;
@@ -33,6 +34,9 @@ export class SearchService {
     filters?: SearchFilters
   ): Promise<SearchResultItem[]> {
     const startTime = performance.now();
+
+    // Increment searches metric
+    metricsService.incrementSearches();
 
     if (!queryText || typeof queryText !== "string" || queryText.trim() === "") {
       throw new Error("O texto de busca não pode ser vazio.");
