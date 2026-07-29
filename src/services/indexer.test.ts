@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { ChunkerService } from "../chunker/chunker.service.js";
-import { EmbeddingService } from "../embedding/embedding.service.js";
-import { VectorService } from "../vector/vector.service.js";
-import { IndexerService } from "./indexer.service.js";
-import { DocumentService } from "../document.service.js";
-import { Document } from "../../models/document.model.js";
+import { ChunkerService } from "./chunker/chunker.service.js";
+import { EmbeddingService } from "./embedding/embedding.service.js";
+import { VectorService } from "./vector/vector.service.js";
+import { IndexerService } from "./indexer/indexer.service.js";
+import { DocumentService } from "./document.service.js";
+import { Document } from "../models/document.model.js";
 
 // ==========================================
 // 1. CHUNKER SERVICE TESTS

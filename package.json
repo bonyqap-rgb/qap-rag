@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "tsc",
-    "test": "SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_ROLE_KEY=dummy_key GOOGLE_API_KEY=dummy_key OPENROUTER_API_KEY=dummy_key node --import tsx --test \"src/**/*.test.ts\""
+    "test": "SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_ROLE_KEY=dummy_key GOOGLE_API_KEY=dummy_key OPENROUTER_API_KEY=dummy_key node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.13.0",
