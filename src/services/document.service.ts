@@ -110,9 +110,16 @@ export class DocumentService {
 
     // Validate processingStatus if provided
     if (doc.processingStatus !== undefined) {
-      const allowedStatus: DocumentProcessingStatus[] = ["pending", "processing", "completed", "failed"];
+      const allowedStatus: DocumentProcessingStatus[] = ["pending", "processing", "completed", "failed", "indexed"];
       if (!allowedStatus.includes(doc.processingStatus)) {
-        throw new ValidationError("O campo 'processingStatus' deve ser 'pending', 'processing', 'completed' ou 'failed'.");
+        throw new ValidationError("O campo 'processingStatus' deve ser 'pending', 'processing', 'completed', 'failed' ou 'indexed'.");
+      }
+    }
+
+    // Validate extractedText if provided
+    if (doc.extractedText !== undefined && doc.extractedText !== null) {
+      if (typeof doc.extractedText !== "string") {
+        throw new ValidationError("O campo 'extractedText' deve ser uma string.");
       }
     }
   }

@@ -1,8 +1,10 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { DocumentService } from "../services/document.service.js";
+import { IndexerService } from "../services/indexer/indexer.service.js";
 
 const router = Router();
 export const documentService = new DocumentService();
+const indexerService = new IndexerService();
 
 /**
  * GET /documents
@@ -66,6 +68,23 @@ router.delete("/:id", async (req: Request, res: Response, next: NextFunction) =>
     return res.status(200).json({
       success: true,
       message: "Documento excluído com sucesso."
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /documents/:id/index
+ * Triggers the indexing pipeline for a specific document.
+ */
+router.post("/:id/index", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const documentId = req.params.id as string;
+    await indexerService.indexDocument(documentId);
+    return res.status(200).json({
+      success: true,
+      message: "Processo de indexação concluído com sucesso."
     });
   } catch (error) {
     next(error);
