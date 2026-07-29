@@ -1,5 +1,7 @@
 import dotenv from "dotenv";
 import OpenAI from "openai";
+import { env } from "../config/env.js";
+import { chatCircuitBreaker } from "../services/circuit-breaker.service.js";
 
 dotenv.config();
 
@@ -34,8 +36,8 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
  */
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
-  retries = 3,
-  delayMs = 1000
+  retries = env.LLM_RETRIES,
+  delayMs = env.LLM_RETRY_DELAY
 ): Promise<T> {
   let attempt = 0;
   while (true) {
@@ -87,10 +89,10 @@ ${context || "Nenhum contexto encontrado."}
 PERGUNTA:
 ${question}`;
 
-  const model = options.model || "openai/gpt-4.1-mini";
+  const model = options.model || "openai/gpt-4-mini";
   const temperature = options.temperature !== undefined ? options.temperature : 0;
-  const timeoutLimit = options.timeout || 25000;
-  const retryCount = options.retries !== undefined ? options.retries : 3;
+  const timeoutLimit = options.timeout || env.LLM_TIMEOUT;
+  const retryCount = options.retries !== undefined ? options.retries : env.LLM_RETRIES;
 
   const apiCall = () =>
     withTimeout(
@@ -111,7 +113,9 @@ ${question}`;
       timeoutLimit
     );
 
-  const completion = await retryWithBackoff(apiCall, retryCount, 1000);
+  const completion = await chatCircuitBreaker.execute(() =>
+    retryWithBackoff(apiCall, retryCount, env.LLM_RETRY_DELAY)
+  );
 
   const answer = completion.choices[0]?.message?.content;
 

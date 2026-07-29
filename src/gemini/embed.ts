@@ -1,14 +1,14 @@
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
+import { env } from "../config/env.js";
+import { embeddingCache, generateHashKey } from "../services/cache.service.js";
+import { geminiCircuitBreaker } from "../services/circuit-breaker.service.js";
 
 dotenv.config();
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GOOGLE_API_KEY!,
 });
-
-// Simple, high-performance in-memory cache to skip duplicate embedding generations
-const embeddingCache = new Map<string, number[]>();
 
 /**
  * Performs a promise with timeout capability.
@@ -36,8 +36,8 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
  */
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
-  retries = 3,
-  delayMs = 1000
+  retries = env.LLM_RETRIES,
+  delayMs = env.LLM_RETRY_DELAY
 ): Promise<T> {
   let attempt = 0;
   while (true) {
@@ -68,25 +68,29 @@ export async function createEmbedding(text: string): Promise<number[]> {
   }
 
   const normalizedText = text.trim();
+  const cacheKey = generateHashKey(normalizedText);
 
   // Return cached result if already computed to avoid redundant API queries
-  if (embeddingCache.has(normalizedText)) {
+  const cached = embeddingCache.get(cacheKey);
+  if (cached) {
     console.log(`[EMBEDDING CACHE] Retornando vetor em cache para: "${normalizedText.substring(0, 30)}..."`);
-    return embeddingCache.get(normalizedText)!;
+    return cached;
   }
 
-  // Define the core API operation with a 15-second timeout protection
+  // Define the core API operation with timeout protection
   const apiCall = () =>
     withTimeout(
       ai.models.embedContent({
         model: "gemini-embedding-001",
         contents: normalizedText,
       }),
-      15000
+      env.LLM_TIMEOUT
     );
 
-  // Execute the API call with exponential backoff retry on transient issues
-  const response = await retryWithBackoff(apiCall, 3, 1000);
+  // Execute the API call inside the Circuit Breaker with exponential backoff retry on transient issues
+  const response = await geminiCircuitBreaker.execute(() =>
+    retryWithBackoff(apiCall, env.LLM_RETRIES, env.LLM_RETRY_DELAY)
+  );
 
   const embedding = response.embeddings?.[0]?.values;
 
@@ -96,7 +100,7 @@ export async function createEmbedding(text: string): Promise<number[]> {
   }
 
   // Populate cache for subsequent operations
-  embeddingCache.set(normalizedText, embedding);
+  embeddingCache.set(cacheKey, embedding);
 
   return embedding;
 }

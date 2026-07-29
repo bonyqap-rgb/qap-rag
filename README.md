@@ -1,16 +1,14 @@
 # QAP RAG - Backend
 
-<!-- Teste Jules -->
-
 Este é o backend do QAP RAG, um sistema de Retrieval-Augmented Generation (RAG) desenvolvido em TypeScript/Node.js ES module utilizando Express e Supabase.
 
 O pipeline de RAG foi inteiramente aprimorado para fornecer precisão e robustez de nível de produção, minimizando custos, otimizando performance e mitigando alucinações de LLM. Todo o comportamento das APIs originais externas e as regras de negócio foram preservados com retrocompatibilidade total.
 
 ---
 
-## 🛠️ Arquitetura Detalhada do Pipeline RAG
+## 🛠️ Arquitetura Detalhada do Pipeline RAG de Produção
 
-O fluxo de processamento e recuperação semântica de documentos do sistema segue a seguinte arquitetura de alta performance:
+O fluxo de processamento, resiliência, rate limiting e recuperação semântica de documentos do sistema segue a seguinte arquitetura de alta performance:
 
 ```
                   ┌────────────────────────┐
@@ -28,8 +26,9 @@ O fluxo de processamento e recuperação semântica de documentos do sistema seg
                     - Identifica o número da página de cada bloco
                               ▼
                 [3. Cache & Geração de Vetores] (embed.ts)
-                    - Skip de trechos duplicados no cache local
-                    - Timeout de segurança e retentativas exponenciais
+                    - Chaves baseadas em hash SHA-256 do texto
+                    - TTL configurável com expiração automática
+                    - Economia de custos e chamadas de rede redundantes
                               ▼
                 [4. Banco de Dados / Supabase] (saveKnowledge.ts)
                     - Desduplica trechos do mesmo upload
@@ -39,36 +38,39 @@ O fluxo de processamento e recuperação semântica de documentos do sistema seg
 
 ---
 
-## 🚀 Melhorias de Alta Precisão Implementadas
+## 🚀 Melhorias de Alta Precisão e Hardening para Produção
 
-### 1. Processamento e Normalização de Documentos (`src/pdf/readPdf.ts`)
-- **Extração Segura**: Limpa bytes corrompidos, caracteres de controle ASCII não imprimíveis e normaliza múltiplos espaços em branco redundantes.
-- **Preservação de Estrutura**: Injeta tags explícitas `[PAGE_MARKER:i]` entre as páginas do documento durante a leitura física, permitindo o rastreamento preciso da página de origem de cada segmento.
+### 1. Cache de Embeddings Avançado (`src/services/cache.service.ts`)
+- **Provedores Intercambiáveis**: Implementa uma interface desacoplada `CacheProvider` para fácil substituição por sistemas externos (como Redis).
+- **TTL & Max Size**: Cache de memória com expiração automática por TTL e tamanho máximo configuráveis via variáveis de ambiente para prevenir vazamentos de memória.
+- **Segurança de Chaves**: Utiliza um algoritmo de Hashing SHA-256 no texto normalizado para garantir consistência e evitar vazamento de dados nos identificadores de cache.
 
-### 2. Divisão Inteligente (Semantic-Aware Chunking) (`src/chunker/createChunks.ts`)
-- **Respeito a Sentenças**: Abandona o fatiamento posicional por contagem cega de caracteres. A nova estratégia tokeniza o texto em frases com base em pontuações terminativas (`. `, `? `, `! `, `\n`).
-- **Agrupamento Semântico**: Constrói os blocos acumulando sentenças inteiras respeitando os limites de `chunkSize` e aplicando sobreposição (`overlap`) em nível de frases.
-- **Tracking Dinâmico de Páginas**: Varre as tags `[PAGE_MARKER:X]` durante o processo, prefixando o trecho com uma marcação retrocompatível `[PAGE:X]`.
+### 2. Resiliência e Tolerância a Falhas (`src/services/circuit-breaker.service.ts`)
+- **Circuit Breaker Dedicado**: Implementa o padrão de disjuntor para chamadas ao Gemini e OpenRouter. Transiciona entre os estados `CLOSED`, `OPEN` e `HALF_OPEN`. Em caso de falhas consecutivas, rejeita chamadas imediatamente (Fast-Fail) para proteger recursos.
+- **Retry com Backoff Exponencial**: Lógica inteligente de retentativas para erros transitórios com atrasos configuráveis.
 
-### 3. Embeddings Resilientes e Cache de Consultas (`src/gemini/embed.ts`)
-- **Cache Interno de Alta Performance**: Armazena em cache na memória (`Map`) vetores de embeddings calculados para o mesmo texto, economizando chamadas de rede e custos de API.
-- **Retentativas de Falhas Temporárias**: Aplica backoff exponencial (3 tentativas) e limites de tempo (Timeout de 15s) para lidar de forma transparente com oscilações de rede.
+### 3. Rate Limiting por IP (`src/middlewares/rate-limit.middleware.ts`)
+- **Proteção dos Endpoints**: Protege as rotas `/chat`, `/search` e `/documents` contra ataques de força bruta, DDoS e abuso de recursos.
+- **Configuração Customizada**: Permite configurar limites e janelas de tempo de forma individualizada para cada endpoint.
+- **Mensagem Padronizada**: Retorna erros em formato JSON uniforme de acordo com os padrões corporativos de tratamento de erro.
 
-### 4. Armazenamento com Metadados Aninhados (`src/services/saveKnowledge.ts`)
-- **Prevenção de Duplicidade**: Filtra e elimina trechos de texto redundantes do mesmo documento antes de realizar a inserção no Supabase.
-- **Codificação de Metadados**: Codifica de forma transparente metadados estruturados (nome do arquivo original, número da página correspondente, índice do bloco, total de blocos gerados e timestamp de criação) em um prefixo JSON limpo, inserido na coluna de texto `content` original.
+### 4. Monitoramento Avançado e Health Checks (`src/api/health.ts`)
+- **GET /health**: Liveness probe ultraleve que retorna informações rápidas de integridade do processo para orquestradores como Kubernetes.
+- **GET /ready**: Readiness probe profunda que valida:
+  - Conexão ativa com o banco de dados Supabase.
+  - Disponibilidade da busca semântica pgvector via RPC `match_documents`.
+  - Integridade e validade das credenciais de API para provedores de LLM.
+  - Carregamento de configurações críticas.
 
-### 5. Recuperação e Ranking Semântico Otimizados (`src/vector/search.ts`)
-- **Filtro de Relevância por Similaridade**: Limita resultados com pontuação abaixo de uma similaridade configurável (padrão `0.3`).
-- **Deduplicação Dinâmica**: Elimina trechos duplicados ou redundantes retornados na busca semântica antes de enviar a informação final ao construtor de prompts.
+### 5. Observabilidade e Logs Estruturados (`src/services/logger.service.ts`)
+- **JSON de Linha Única**: Logs formatados estritamente em JSON de linha única para fácil integração com Datadog, Kibana, CloudWatch ou Loki.
+- **Privacidade de Dados (LGPD/Security)**: Omitimos automaticamente chaves de API, prompts completos, respostas da LLM ou dados pessoais sensíveis dos payloads de log.
+- **Rastreabilidade**: Middleware injeta um `requestId` único em cada requisição para rastrear todo o fluxo de ponta a ponta.
 
-### 6. Engenharia de Prompts e Citações de Fontes (`src/gemini/chat.ts`)
-- **Mitigação de Alucinação**: Instruções de sistema estritas exigem que o Gemini responda fundamentando-se exclusivamente nas fontes fornecidas. Se a informação não estiver disponível, o modelo responde rigidamente:
-  `"Não encontrei essa informação na base de conhecimento."`
-- **Citação Explícita de Fontes**: O prompt inclui tags estruturadas (ex: `[Fonte: doc.pdf, Página: 2]`), orientando o modelo a incluir as devidas referências em sua resposta final.
-
-### 7. Payload de API Rico e Retrocompatível (`src/api/chat.ts`)
-- Retorna uma resposta estruturada robusta contendo tanto a resposta quanto as referências explícitas das fontes em um formato limpo preparado para o frontend.
+### 6. Segurança e Validação de Payload (`src/middlewares/validation.middleware.ts`)
+- **Validação de Tipagem Estrita**: Middleware valida tipos de dados de payloads recebidos em `/chat` e `/search`.
+- **Sanitização de Entradas**: Limpeza e escape de strings para prevenir ataques de Cross-Site Scripting (XSS) ou injeções de script.
+- **Segurança HTTP**: Integrado o middleware `helmet` para aplicar cabeçalhos de segurança web avançados.
 
 ---
 
@@ -82,7 +84,7 @@ O fluxo principal do QAP IA orquestra a busca semântica, a montagem do contexto
    [ Pergunta do Usuário (message) ]
                  │
                  ▼
-     [ Validação de Entrada ]
+     [ Validação de Entrada ] (validation.middleware.ts)
                  │
                  ▼
        [ Busca Semântica ] (SearchService.search) -> Retorna chunks relevantes e scores
@@ -94,28 +96,26 @@ O fluxo principal do QAP IA orquestra a busca semântica, a montagem do contexto
       [ Construtor de Contexto ] (Deduplica, ordena e limita tamanho do contexto)
                  │
                  ▼
-       [ Construtor de Prompt ] (Separa systemPrompt das instruções do usuário)
+       [ Construtor de Prompt ] (System prompt + User prompt estruturados)
                  │
                  ▼
- [ Gemini / OpenRouter API Call ] (chatWithContextConfigurable com timeouts e retries)
+ [ Gemini / OpenRouter API Call ] (Circuit Breaker + Retry + Timeout)
                  │
                  ▼
-    [ Resposta Estruturada + Logs ] (Retorna resposta, fontes reais utilizadas e tempos)
+    [ Resposta Estruturada + Logs JSON ] (Retorna resposta, fontes reais utilizadas e tempos de processamento)
 ```
 
-### 🛣️ Endpoint do Chat
+### 🛣️ Endpoints Principais
 
 #### `POST /chat`
-Realiza a orquestração completa do fluxo RAG e retorna uma resposta fundamentada nas fontes de conhecimento encontradas.
+Orquestração completa do fluxo RAG de produção com limite de requisições ativo.
 
 - **Corpo da Requisição (JSON)**:
-  - `message` (obrigatório, string): Pergunta ou mensagem do usuário.
-  - `temperature` (opcional, número, padrão `0`): Temperatura de geração da resposta.
-  - `topK` (opcional, número, padrão `5`): Quantidade de chunks retornados para compor o contexto.
-  - `maxContextSize` (opcional, número, padrão `4000`): Limite máximo em caracteres do contexto de suporte.
-  - `timeout` (opcional, número, padrão `25000`): Limite de tempo em milissegundos para a API do Gemini.
-  - `model` (opcional, string, padrão `"openai/gpt-4.1-mini"`): Modelo para geração via OpenRouter.
-  - `filters` (opcional, objeto): Filtros de metadados (como `documentId`, `category`, `documentType`).
+  - `message` (obrigatório, string): Pergunta do usuário.
+  - `temperature` (opcional, número, padrão `0`): Temperatura de geração.
+  - `topK` (opcional, número, padrão `5`): Quantidade de chunks retornados.
+  - `maxContextSize` (opcional, número, padrão `4000`): Limite máximo de caracteres de suporte.
+  - `timeout` (opcional, número, padrão `25000`): Limite de tempo em ms para a chamada da API.
 
 ##### Exemplo de Requisição:
 ```json
@@ -126,10 +126,10 @@ Realiza a orquestração completa do fluxo RAG e retorna uma resposta fundamenta
 }
 ```
 
-##### Exemplo de Resposta de Sucesso (`200 OK`):
+##### Exemplo de Resposta (`200 OK`):
 ```json
 {
-  "answer": "O policiamento comunitário foca no engajamento social e proximidade com o cidadão, conforme as diretrizes estabelecidas. [doc: manual_pm.pdf, pág: 3].",
+  "answer": "O policiamento comunitário foca no engajamento social. [doc: manual_pm.pdf, pág: 3].",
   "sources": [
     {
       "documentId": "8c77be02-4ee3-455b-80df-67993a4bc4d4",
@@ -146,7 +146,9 @@ Realiza a orquestração completa do fluxo RAG e retorna uma resposta fundamenta
 }
 ```
 
-### ⚙️ Variáveis de Ambiente Configuráveis
+---
+
+## ⚙️ Variáveis de Ambiente Configuráveis
 
 O sistema suporta as seguintes variáveis de ambiente essenciais para o fluxo RAG:
 - `SUPABASE_URL`: URL da API do Supabase.
@@ -158,168 +160,65 @@ O sistema suporta as seguintes variáveis de ambiente essenciais para o fluxo RA
 - `DEFAULT_MIN_SCORE`: Score de similaridade mínimo exigido nas buscas (padrão `0.3`).
 - `DEFAULT_MAX_CONTEXT_SIZE`: Tamanho máximo em caracteres do contexto unificado (padrão `4000`).
 
----
-
-## 📂 Módulo de Gerenciamento de Documentos (Document Management)
-
-Este módulo fornece uma base sólida e fortemente tipada para o gerenciamento de metadados de documentos no banco de dados Supabase, servindo como fundação para o processamento de novos arquivos.
-
-### 📋 Endpoints da API
-
-#### 1. Listar Documentos (`GET /documents`)
-Retorna uma lista contendo todos os documentos cadastrados no banco de dados, ordenados por data de criação de forma decrescente.
-- **Resposta de Sucesso (`200 OK`)**:
-  ```json
-  [
-    {
-      "id": "8c77be02-4ee3-455b-80df-67993a4bc4d4",
-      "title": "Manual de Procedimentos da PM",
-      "category": "Segurança Pública",
-      "version": "1.2.0",
-      "source": "Secretaria de Segurança",
-      "language": "pt-BR",
-      "filename": "manual_procedimentos.pdf",
-      "fileSize": 102400,
-      "mimeType": "application/pdf",
-      "totalPages": 45,
-      "processingStatus": "completed",
-      "createdAt": "2023-10-10T12:00:00Z",
-      "updatedAt": "2023-10-10T12:00:00Z"
-    }
-  ]
-  ```
-
-#### 2. Obter Detalhes de um Documento (`GET /documents/:id`)
-Recupera os metadados de um documento específico através do seu ID (UUID).
-- **Parâmetros de Rota**:
-  - `id` (UUID): ID do documento a ser buscado.
-- **Resposta de Sucesso (`200 OK`)**: Retorna o objeto do documento solicitado.
-- **Resposta de Erro (`404 Not Found`)**:
-  ```json
-  {
-    "error": "ERROR",
-    "timestamp": "2023-10-10T12:05:00Z",
-    "message": "Documento com ID '...' não encontrado.",
-    "route": "/documents/..."
-  }
-  ```
-
-#### 3. Cadastrar Metadados de Documento (`POST /documents`)
-Cadastra um novo registro de metadados para um documento.
-- **Corpo da Requisição (JSON)**:
-  - `title` (obrigatório, string, máx 255 caracteres): Título amigável do documento.
-  - `category` (obrigatório, string): Categoria do documento.
-  - `version` (obrigatório, string, formato `x.y` ou `x.y.z`): Versão do documento.
-  - `source` (obrigatório, string): Fonte do documento.
-  - `language` (obrigatório, string): Idioma do documento.
-  - `filename` (obrigatório, string): Nome do arquivo físico associado.
-  - `fileSize` (obrigatório, número positivo): Tamanho do arquivo em bytes.
-  - `mimeType` (obrigatório, string): Tipo MIME do arquivo (ex: `application/pdf`).
-  - `totalPages` (obrigatório, número positivo): Total de páginas do arquivo.
-  - `processingStatus` (opcional, padrão `'pending'`): Status do processamento (`pending`, `processing`, `completed`, `failed`).
-- **Resposta de Sucesso (`201 Created`)**: Retorna o documento criado com ID gerado e timestamps.
-- **Resposta de Erro (`400 Bad Request`)**: Erro de validação se algum campo obrigatório estiver ausente ou inválido.
-
-#### 4. Atualizar Metadados de Documento (`PATCH /documents/:id`)
-Atualiza parcialmente os metadados de um documento existente.
-- **Parâmetros de Rota**:
-  - `id` (UUID): ID do documento.
-- **Corpo da Requisição (JSON)**: Qualquer um dos campos opcionais permitidos para modificação (ex: `title`, `category`, `version`, `source`, `language`, `processingStatus`).
-- **Resposta de Sucesso (`200 OK`)**: Retorna o documento atualizado.
-- **Resposta de Erro (`400 Bad Request`)**: Se algum dado de atualização violar as restrições de validação.
-- **Resposta de Erro (`404 Not Found`)**: Se o documento com o ID especificado não for encontrado.
-
-#### 5. Excluir Documento (`DELETE /documents/:id`)
-Exclui permanentemente o registro de um documento do banco de dados.
-- **Parâmetros de Rota**:
-  - `id` (UUID): ID do documento.
-- **Resposta de Sucesso (`200 OK`)**:
-  ```json
-  {
-    "success": true,
-    "message": "Documento excluído com sucesso."
-  }
-  ```
-- **Resposta de Erro (`404 Not Found`)**: Se o documento não for encontrado.
+### Variáveis Avançadas de Hardening (Produção)
+- `EMBEDDING_CACHE_TTL`: Tempo de expiração do cache de embeddings em segundos (padrão `86400`).
+- `EMBEDDING_CACHE_MAX_SIZE`: Quantidade máxima de elementos mantidos no cache de memória (padrão `1000`).
+- `LLM_TIMEOUT`: Timeout em milissegundos para requisições de IA externa (padrão `25000`).
+- `LLM_RETRIES`: Número máximo de tentativas com backoff exponencial para chamadas de IA (padrão `3`).
+- `LLM_RETRY_DELAY`: Atraso inicial de tentativa em milissegundos (padrão `1000`).
+- `CB_FAILURE_THRESHOLD`: Número de falhas consecutivas para abrir o Circuit Breaker (padrão `5`).
+- `CB_COOLDOWN`: Tempo em milissegundos para aguardar antes de transicionar do disjuntor para `HALF_OPEN` (padrão `30000`).
+- `RATE_LIMIT_WINDOW_MS`: Janela de tempo de rate limiting por IP em milissegundos (padrão `900000` - 15 minutos).
+- `RATE_LIMIT_MAX_CHAT`: Limite de requisições de chat por janela (padrão `100`).
+- `RATE_LIMIT_MAX_SEARCH`: Limite de requisições de busca por janela (padrão `100`).
+- `RATE_LIMIT_MAX_INDEX`: Limite de requisições de gerenciamento/upload por janela (padrão `20`).
 
 ---
 
-## 🔍 Busca Semântica e Recuperação de Contexto (Semantic Search & Context Retrieval)
+## 🧪 Executando Testes de Produção
 
-O sistema conta com um pipeline de busca semântica robusto e de alta precisão que realiza a recuperação de contexto utilizando os vetores armazenados no Supabase pgvector.
-
-### 📋 Fluxo de Recuperação
-
-```
-  [ Pergunta do Usuário ]
-            │
-            ▼
- [ Embedding da Pergunta ] (Gemini API: gemini-embedding-001)
-            │
-            ▼
-  [ Busca Vetorial RPC ] (Supabase pgvector: match_documents)
-            │
-            ├─► Filtros de Metadados Opcionais (documentId, category, documentType)
-            │
-            ▼
-    [ Top-K Resultados ] (Filtrados por score mínimo e desduplicados)
-            │
-            ▼
-    [ Context Builder ] (Ordena por documento/índice, limita tamanho máximo)
-            │
-            ▼
-  [ Retorno Estruturado ] (Results + Contexto unificado)
-```
-
-### 🛣️ Endpoint de Busca Semântica
-
-#### `POST /search`
-Realiza a busca semântica na base de conhecimento e retorna os trechos mais relevantes juntamente com o contexto textual unificado e limpo.
-
-- **Corpo da Requisição (JSON)**:
-  - `query` (obrigatório, string): Pergunta ou termo de busca.
-  - `topK` (opcional, número, padrão `5`): Quantidade máxima de resultados a retornar.
-  - `scoreThreshold` (opcional, número, padrão `0.3`): Nota de corte de similaridade mínima (cosina).
-  - `filters` (opcional, objeto):
-    - `documentId` (opcional, UUID): ID do documento específico.
-    - `category` (opcional, string): Filtrar por categoria do documento.
-    - `documentType` (opcional, string): Filtrar pelo tipo de documento (MIME type como `application/pdf`).
-
-##### Exemplo de Requisição:
-```json
-{
-  "query": "Qual o procedimento para policiamento ostensivo?",
-  "topK": 3,
-  "scoreThreshold": 0.5,
-  "filters": {
-    "category": "Segurança Pública"
-  }
-}
-```
-
-##### Exemplo de Resposta de Sucesso (`200 OK`):
-```json
-{
-  "query": "Qual o procedimento para policiamento ostensivo?",
-  "results": [
-    {
-      "documentId": "8c77be02-4ee3-455b-80df-67993a4bc4d4",
-      "chunkIndex": 12,
-      "score": 0.9345,
-      "text": "O policiamento ostensivo deve seguir as diretrizes de proximidade comunitária..."
-    }
-  ],
-  "context": "O policiamento ostensivo deve seguir as diretrizes de proximidade comunitária..."
-}
-```
-
----
-
-## 🧪 Testes Automatizados
-
-A suíte de testes unitários integrada sob o runner nativo do Node.js cobre as lógicas cruciais de chunking, marcações semânticas de página, regras de repositório, validações do serviço de documentos, busca semântica, montagem do contexto e as rotas de API Express.
+A suíte de testes unitários integrada sob o runner nativo do Node.js cobre as lógicas cruciais de processamento, cache de embeddings, circuit breakers, rate limiting, busca semântica, montagem do contexto e rotas de API.
 
 Para executar localmente:
 ```bash
 npm test
 ```
+
+Para validar a compilação do TypeScript:
+```bash
+npm run build
+```
+
+---
+
+## 🐳 Docker (Implantação Segura em Produção)
+
+A aplicação vem empacotada com um `Dockerfile` seguro e otimizado com compilação multi-stage.
+
+### Construir a Imagem
+```bash
+docker build -t qap-rag-backend .
+```
+
+### Executar o Container de Produção
+```bash
+docker run -p 3001:3001 \
+  -e SUPABASE_URL="seu-supabase-url" \
+  -e SUPABASE_SERVICE_ROLE_KEY="seu-service-role-key" \
+  -e GOOGLE_API_KEY="sua-google-key" \
+  -e OPENROUTER_API_KEY="sua-openrouter-key" \
+  qap-rag-backend
+```
+
+---
+
+## 🔍 Troubleshooting & Observabilidade em Produção
+
+### 1. O que fazer se o Circuit Breaker abrir?
+- Verifique os logs estruturados filtrando por `level: "ERROR"`. Procure logs contendo `[CIRCUIT BREAKER]`.
+- Se o disjuntor estiver aberto, chamadas adicionais falham rápido com a mensagem `Circuito do serviço '...' está aberto. Chamada rejeitada imediatamente.`
+- O disjuntor tentará automaticamente se fechar (estado `HALF_OPEN` -> `CLOSED`) após o período de cooldown configurado em `CB_COOLDOWN` assim que a primeira chamada subsequente for realizada com sucesso.
+
+### 2. Monitoramento de Liveness e Readiness
+- Configure probes de liveness em `/health` para garantir que o processo está respondendo.
+- Configure probes de readiness em `/ready` para garantir que o contêiner só passe a receber tráfego se as conexões com o Supabase e as APIs de LLM estiverem plenamente operacionais.
