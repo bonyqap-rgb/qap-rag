@@ -1,15 +1,20 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import { Server } from "http";
 
 import { env } from "./config/env.js";
-import { supabase } from "./config/supabase.js";
 import { errorHandler } from "./middlewares/error.middleware.js";
 import { logger } from "./services/logger.service.js";
 import uploadRouter from "./api/upload.js";
 import chatRouter from "./api/chat.js";
 import documentsRouter from "./api/documents.js";
 import searchRouter from "./api/search.js";
+import healthRouter from "./api/health.js";
+
+// Middlewares
+import { requestLogger } from "./middlewares/request-logger.middleware.js";
+import { chatRateLimiter, searchRateLimiter, indexRateLimiter } from "./middlewares/rate-limit.middleware.js";
 
 // 1. Startup Logging - Environment validation confirmation
 logger.info(`[STARTUP] Variáveis de ambiente validadas com sucesso. Ambiente: ${env.NODE_ENV}`);
@@ -30,22 +35,20 @@ if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
 
 const app = express();
 
+// Set HTTP Security headers using helmet
+app.use(helmet());
+
 app.use(cors());
 
+// Max payload limit
 app.use(
   express.json({
     limit: "10mb",
   })
 );
 
-// Middleware de Logs de requisições estruturado
-app.use((req, _, next) => {
-  logger.info(`[REQUEST] ${req.method} ${req.originalUrl}`, {
-    method: req.method,
-    route: req.originalUrl,
-  });
-  next();
-});
+// Apply Standardized JSON HTTP request logging
+app.use(requestLogger);
 
 // Página temporária para testar upload pelo navegador
 app.get("/upload-test", (_, res) => {
@@ -107,47 +110,14 @@ app.post("/teste", (req, res) => {
   });
 });
 
-app.use("/upload", uploadRouter);
-app.use("/chat", chatRouter);
-app.use("/documents", documentsRouter);
-app.use("/search", searchRouter);
+// Health router endpoints (contains /health and /ready)
+app.use("/", healthRouter);
 
-// Enhanced /health endpoint according to requirements
-app.get("/health", async (_, res) => {
-  let databaseConnected = false;
-  let dbErrorMsg: string | null = null;
-
-  try {
-    const { error } = await supabase
-      .from("knowledge_documents")
-      .select("id")
-      .limit(1);
-
-    if (error) {
-      dbErrorMsg = error.message;
-    } else {
-      databaseConnected = true;
-    }
-  } catch (error) {
-    dbErrorMsg = error instanceof Error ? error.message : String(error);
-  }
-
-  const healthData = {
-    serviceName: "qap-rag",
-    version: "1.0.0",
-    status: databaseConnected ? "ok" : "error",
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString(),
-    environment: env.NODE_ENV,
-    supabase: {
-      connected: databaseConnected,
-      error: dbErrorMsg,
-    },
-  };
-
-  const responseStatus = databaseConnected ? 200 : 500;
-  return res.status(responseStatus).json(healthData);
-});
+// Apply Rate Limiters to specific endpoints
+app.use("/upload", indexRateLimiter, uploadRouter);
+app.use("/chat", chatRateLimiter, chatRouter);
+app.use("/documents", indexRateLimiter, documentsRouter);
+app.use("/search", searchRateLimiter, searchRouter);
 
 // Global error handling middleware
 app.use(errorHandler);

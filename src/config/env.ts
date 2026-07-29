@@ -13,6 +13,25 @@ interface EnvVariables {
   DEFAULT_TOP_K: number;
   DEFAULT_MIN_SCORE: number;
   DEFAULT_MAX_CONTEXT_SIZE: number;
+
+  // Cache settings
+  EMBEDDING_CACHE_TTL: number; // in seconds
+  EMBEDDING_CACHE_MAX_SIZE: number;
+
+  // Retry & Timeouts settings
+  LLM_TIMEOUT: number; // in milliseconds
+  LLM_RETRIES: number;
+  LLM_RETRY_DELAY: number; // in milliseconds
+
+  // Circuit Breaker settings
+  CB_FAILURE_THRESHOLD: number; // consecutive failures
+  CB_COOLDOWN: number; // in milliseconds (time to wait before going HALF_OPEN)
+
+  // Rate Limiter settings
+  RATE_LIMIT_WINDOW_MS: number; // time window in ms
+  RATE_LIMIT_MAX_CHAT: number; // max requests per window for /chat
+  RATE_LIMIT_MAX_SEARCH: number; // max requests per window for /search
+  RATE_LIMIT_MAX_INDEX: number; // max requests per window for /documents/index
 }
 
 function validateEnv(): EnvVariables {
@@ -47,6 +66,25 @@ function validateEnv(): EnvVariables {
     DEFAULT_TOP_K: process.env.DEFAULT_TOP_K ? parseInt(process.env.DEFAULT_TOP_K, 10) : 5,
     DEFAULT_MIN_SCORE: process.env.DEFAULT_MIN_SCORE ? parseFloat(process.env.DEFAULT_MIN_SCORE) : 0.3,
     DEFAULT_MAX_CONTEXT_SIZE: process.env.DEFAULT_MAX_CONTEXT_SIZE ? parseInt(process.env.DEFAULT_MAX_CONTEXT_SIZE, 10) : 4000,
+
+    // Cache defaults: TTL 1 day (86400s), max size 1000
+    EMBEDDING_CACHE_TTL: process.env.EMBEDDING_CACHE_TTL ? parseInt(process.env.EMBEDDING_CACHE_TTL, 10) : 86400,
+    EMBEDDING_CACHE_MAX_SIZE: process.env.EMBEDDING_CACHE_MAX_SIZE ? parseInt(process.env.EMBEDDING_CACHE_MAX_SIZE, 10) : 1000,
+
+    // Retry & Timeouts defaults
+    LLM_TIMEOUT: process.env.LLM_TIMEOUT ? parseInt(process.env.LLM_TIMEOUT, 10) : 25000,
+    LLM_RETRIES: process.env.LLM_RETRIES ? parseInt(process.env.LLM_RETRIES, 10) : 3,
+    LLM_RETRY_DELAY: process.env.LLM_RETRY_DELAY ? parseInt(process.env.LLM_RETRY_DELAY, 10) : 1000,
+
+    // Circuit Breaker defaults: 5 failures, 30s cooldown
+    CB_FAILURE_THRESHOLD: process.env.CB_FAILURE_THRESHOLD ? parseInt(process.env.CB_FAILURE_THRESHOLD, 10) : 5,
+    CB_COOLDOWN: process.env.CB_COOLDOWN ? parseInt(process.env.CB_COOLDOWN, 10) : 30000,
+
+    // Rate Limiting defaults: 15 minutes window, 100 reqs for chat/search, 20 for index
+    RATE_LIMIT_WINDOW_MS: process.env.RATE_LIMIT_WINDOW_MS ? parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) : 15 * 60 * 1000,
+    RATE_LIMIT_MAX_CHAT: process.env.RATE_LIMIT_MAX_CHAT ? parseInt(process.env.RATE_LIMIT_MAX_CHAT, 10) : 100,
+    RATE_LIMIT_MAX_SEARCH: process.env.RATE_LIMIT_MAX_SEARCH ? parseInt(process.env.RATE_LIMIT_MAX_SEARCH, 10) : 100,
+    RATE_LIMIT_MAX_INDEX: process.env.RATE_LIMIT_MAX_INDEX ? parseInt(process.env.RATE_LIMIT_MAX_INDEX, 10) : 20,
   };
 }
 
