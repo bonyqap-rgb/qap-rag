@@ -11,6 +11,7 @@ import chatRouter from "./api/chat.js";
 import documentsRouter from "./api/documents.js";
 import searchRouter from "./api/search.js";
 import healthRouter from "./api/health.js";
+import metricsRouter from "./api/metrics.js";
 
 // Middlewares
 import { requestLogger } from "./middlewares/request-logger.middleware.js";
@@ -118,6 +119,7 @@ app.use("/upload", indexRateLimiter, uploadRouter);
 app.use("/chat", chatRateLimiter, chatRouter);
 app.use("/documents", indexRateLimiter, documentsRouter);
 app.use("/search", searchRateLimiter, searchRouter);
+app.use("/metrics", metricsRouter);
 
 // Global error handling middleware
 app.use(errorHandler);

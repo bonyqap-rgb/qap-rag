@@ -1,5 +1,9 @@
 import { DocumentRepository } from "../repositories/document.repository.js";
 import { Document, DocumentProcessingStatus } from "../models/document.model.js";
+import { supabase } from "../config/supabase.js";
+import { createEmbedding } from "../gemini/embed.js";
+import { indexingHistoryService } from "./indexing-history.service.js";
+import { logger } from "./logger.service.js";
 
 export class ValidationError extends Error {
   status = 400;
@@ -171,15 +175,249 @@ export class DocumentService {
   }
 
   /**
-   * Deletes a document or throws NotFoundError
+   * Deletes a document safely (including chunks, embeddings and metadata inside a transaction) or throws NotFoundError.
    */
   async deleteDocument(id: string): Promise<void> {
     if (!id) {
       throw new ValidationError("O ID do documento não foi informado.");
     }
-    const deleted = await this.repository.delete(id);
-    if (!deleted) {
+
+    const doc = await this.repository.getById(id);
+    if (!doc) {
       throw new NotFoundError(`Documento com ID '${id}' não encontrado.`);
+    }
+
+    // Try executing SQL transaction via RPC
+    const { data: rpcSuccess, error: rpcError } = await supabase.rpc("delete_document_transaction", { doc_id: id });
+
+    if (rpcError) {
+      logger.warn(`RPC delete_document_transaction falhou: ${rpcError.message}. Executando exclusão sequencial fallback...`);
+
+      // Fallback: Sequential deletion
+      // Find knowledge document matching the filename
+      const { data: kDoc } = await supabase
+        .from("knowledge_documents")
+        .select("id")
+        .eq("file_name", doc.filename)
+        .maybeSingle();
+
+      if (kDoc) {
+        // Delete chunks
+        const { error: chunksErr } = await supabase
+          .from("knowledge_chunks")
+          .delete()
+          .eq("document_id", kDoc.id);
+        if (chunksErr) throw chunksErr;
+
+        // Delete knowledge document
+        const { error: kDocErr } = await supabase
+          .from("knowledge_documents")
+          .delete()
+          .eq("id", kDoc.id);
+        if (kDocErr) throw kDocErr;
+      }
+
+      // Delete document metadata from documents table
+      const deleted = await this.repository.delete(id);
+      if (!deleted) {
+        throw new NotFoundError(`Documento com ID '${id}' não pôde ser excluído.`);
+      }
+    } else if (!rpcSuccess) {
+      // If RPC returned false, it means document wasn't found or already deleted
+      throw new NotFoundError(`Documento com ID '${id}' não encontrado.`);
+    }
+  }
+
+  /**
+   * Retrieves statistics of the knowledge base.
+   */
+  async getKnowledgeBaseStats(): Promise<any> {
+    const { data, error } = await supabase.rpc("get_knowledge_base_stats");
+    if (error) {
+      logger.warn(`RPC get_knowledge_base_stats falhou ou não existe: ${error.message}. Calculando via consultas de fallback...`);
+      return this.getStatsFallback();
+    }
+    return data;
+  }
+
+  /**
+   * Backup/Fallback stats calculator if PostgreSQL RPC is unavailable.
+   */
+  private async getStatsFallback(): Promise<any> {
+    const { count: totalDocs } = await supabase.from("documents").select("*", { count: "exact", head: true });
+    const { count: indexedDocs } = await supabase.from("documents").select("*", { count: "exact", head: true }).eq("processing_status", "completed");
+    const { count: pendingDocs } = await supabase.from("documents").select("*", { count: "exact", head: true }).eq("processing_status", "pending");
+    const { count: totalChunks } = await supabase.from("knowledge_chunks").select("*", { count: "exact", head: true });
+    const { count: totalKDocs } = await supabase.from("knowledge_documents").select("*", { count: "exact", head: true });
+
+    const { data: lastKDocs } = await supabase.from("knowledge_documents").select("created_at").order("created_at", { ascending: false }).limit(1);
+    const lastIndexed = lastKDocs && lastKDocs.length > 0 ? lastKDocs[0].created_at : null;
+
+    const { data: chunksSample } = await supabase.from("knowledge_chunks").select("content").limit(100);
+    let avgSize = 0;
+    if (chunksSample && chunksSample.length > 0) {
+      const totalLen = chunksSample.reduce((acc, c) => acc + (c.content?.length || 0), 0);
+      avgSize = totalLen / chunksSample.length;
+    }
+
+    const avgChunksPerDoc = totalKDocs && totalKDocs > 0 ? parseFloat(((totalChunks || 0) / totalKDocs).toFixed(2)) : 0;
+
+    return {
+      total_documentos: totalDocs || 0,
+      documentos_indexados: indexedDocs || 0,
+      documentos_pendentes: pendingDocs || 0,
+      total_chunks: totalChunks || 0,
+      media_chunks_por_documento: avgChunksPerDoc,
+      tamanho_medio_chunks: parseFloat(avgSize.toFixed(2)),
+      data_ultima_indexacao: lastIndexed,
+      quantidade_vetores_armazenados: totalChunks || 0,
+    };
+  }
+
+  /**
+   * Reindexes an existing document by ID (regenerating embeddings for its chunks)
+   */
+  async reindexDocument(id: string): Promise<any> {
+    if (!id) {
+      throw new ValidationError("O ID do documento não foi informado.");
+    }
+
+    const doc = await this.getDocumentById(id);
+
+    // Find corresponding knowledge document
+    const { data: kDoc, error: kDocError } = await supabase
+      .from("knowledge_documents")
+      .select("id")
+      .eq("file_name", doc.filename)
+      .maybeSingle();
+
+    if (kDocError || !kDoc) {
+      throw new NotFoundError(`Documento de conhecimento correspondente a '${doc.filename}' não encontrado.`);
+    }
+
+    const kDocId = kDoc.id;
+
+    // Fetch existing chunks
+    const { data: chunks, error: chunksError } = await supabase
+      .from("knowledge_chunks")
+      .select("chunk_index, content")
+      .eq("document_id", kDocId)
+      .order("chunk_index", { ascending: true });
+
+    if (chunksError) {
+      throw chunksError;
+    }
+
+    if (!chunks || chunks.length === 0) {
+      throw new ValidationError("Não há trechos de texto na base para reindexar.");
+    }
+
+    // Set status to processing
+    await this.updateDocument(id, { processingStatus: "processing" });
+
+    const startTime = performance.now();
+    const timestamp = new Date().toISOString();
+
+    try {
+      const newChunksData = [];
+
+      for (const chunk of chunks) {
+        let cleanText = chunk.content || "";
+        const metaMatch = cleanText.match(/^\[METADATA:[\s\S]*?\]\n([\s\S]*)$/);
+        if (metaMatch) {
+          cleanText = metaMatch[1];
+        }
+        cleanText = cleanText.trim();
+
+        // Regenerate embedding vector
+        const embedding = await createEmbedding(cleanText);
+
+        newChunksData.push({
+          chunk_index: chunk.chunk_index,
+          content: chunk.content,
+          embedding,
+        });
+      }
+
+      // Try RPC transaction update
+      const rpcData = newChunksData.map(c => ({
+        chunk_index: c.chunk_index,
+        content: c.content,
+        embedding: c.embedding
+      }));
+
+      const { error: rpcErr } = await supabase.rpc("update_document_chunks_transaction", {
+        p_k_doc_id: kDocId,
+        p_chunks_data: rpcData
+      });
+
+      if (rpcErr) {
+        logger.warn(`RPC update_document_chunks_transaction falhou: ${rpcErr.message}. Executando reindexação sequencial fallback...`);
+
+        // Fallback: Delete old and insert new sequentially
+        const { error: delErr } = await supabase
+          .from("knowledge_chunks")
+          .delete()
+          .eq("document_id", kDocId);
+
+        if (delErr) throw delErr;
+
+        const rowsToInsert = newChunksData.map(c => ({
+          document_id: kDocId,
+          chunk_index: c.chunk_index,
+          content: c.content,
+          embedding: c.embedding
+        }));
+
+        const { error: insErr } = await supabase
+          .from("knowledge_chunks")
+          .insert(rowsToInsert);
+
+        if (insErr) throw insErr;
+      }
+
+      // Update processing status and timestamp
+      await this.updateDocument(id, { processingStatus: "completed" });
+
+      await supabase
+        .from("knowledge_documents")
+        .update({ updated_at: timestamp })
+        .eq("id", kDocId);
+
+      const duration = Math.round(performance.now() - startTime);
+
+      // Record history
+      await indexingHistoryService.record({
+        document: doc.filename,
+        date: timestamp,
+        duration,
+        chunks_count: chunks.length,
+        embeddings_count: chunks.length,
+        success: true,
+      });
+
+      return {
+        success: true,
+        message: "Documento reindexado com sucesso.",
+        chunksCount: chunks.length,
+        durationMs: duration
+      };
+
+    } catch (error: any) {
+      const duration = Math.round(performance.now() - startTime);
+      await this.updateDocument(id, { processingStatus: "failed" });
+
+      await indexingHistoryService.record({
+        document: doc.filename,
+        date: new Date().toISOString(),
+        duration,
+        chunks_count: chunks?.length || 0,
+        embeddings_count: chunks?.length || 0,
+        success: false,
+        error_message: error.message || String(error)
+      });
+
+      throw error;
     }
   }
 }

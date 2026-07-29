@@ -5,6 +5,7 @@ import { PromptBuilderService } from "./prompt-builder.service.js";
 import { chatWithContextConfigurable } from "../gemini/chat.js";
 import { supabase } from "../config/supabase.js";
 import { logger } from "./logger.service.js";
+import { metricsService } from "./metrics.service.js";
 
 export interface ChatOptions {
   temperature?: number;
@@ -47,6 +48,9 @@ export class ChatService {
    */
   static async chat(question: string, options: ChatOptions = {}): Promise<ChatResponse> {
     const overallStartTime = performance.now();
+
+    // Increment chat metric
+    metricsService.incrementChats();
 
     // 1. Input Validation
     if (!question || typeof question !== "string" || question.trim() === "") {

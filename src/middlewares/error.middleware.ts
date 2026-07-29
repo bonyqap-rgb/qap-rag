@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { env } from "../config/env.js";
 import { logger } from "../services/logger.service.js";
+import { metricsService } from "../services/metrics.service.js";
 
 /**
  * Standardized global error handling middleware with environment awareness (development vs. production).
@@ -11,6 +12,9 @@ export function errorHandler(
   res: Response,
   _next: NextFunction
 ) {
+  // Increment error metric
+  metricsService.incrementErrors();
+
   const timestamp = new Date().toISOString();
   const route = req.originalUrl || req.url;
   const status = err?.status || 500;

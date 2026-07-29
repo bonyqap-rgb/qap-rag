@@ -4,6 +4,8 @@ import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
 import { createEmbedding } from "../gemini/embed.js";
 import { saveKnowledge } from "../services/saveKnowledge.js";
+import { logger } from "../services/logger.service.js";
+import { indexingHistoryService } from "../services/indexing-history.service.js";
 
 const router = Router();
 
@@ -12,13 +14,32 @@ const upload = multer({
 });
 
 router.post("/", upload.single("file"), async (req: Request, res: Response, next: NextFunction) => {
+  const start = performance.now();
+  const requestId = req.headers["x-request-id"] as string;
+  let fileName = "unknown";
+
   try {
     if (!req.file) {
+      const duration = parseFloat((performance.now() - start).toFixed(2));
+      logger.warn("[ADMIN] Falha no upload: nenhum arquivo enviado", {
+        requestId,
+        duration,
+        status: "error",
+      });
+
       return res.status(400).json({
         success: false,
         error: "Nenhum arquivo enviado.",
       });
     }
+
+    fileName = req.file.originalname;
+
+    logger.info("[ADMIN] Upload de documento iniciado", {
+      requestId,
+      filename: fileName,
+      fileSize: req.file.size,
+    });
 
     // 1. Parsing robusto de PDF com limpeza e formatação de marcações
     const text = await readPdf(req.file.buffer);
@@ -42,6 +63,26 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       embeddings
     );
 
+    const duration = parseFloat((performance.now() - start).toFixed(2));
+
+    logger.info("[ADMIN] Upload e indexação de documento concluídos com sucesso", {
+      requestId,
+      duration,
+      status: "success",
+      filename: fileName,
+      chunksCount: chunks.length,
+    });
+
+    // Record successful indexing history
+    await indexingHistoryService.record({
+      document: fileName,
+      date: new Date().toISOString(),
+      duration: Math.round(duration),
+      chunks_count: chunks.length,
+      embeddings_count: embeddings.length,
+      success: true,
+    });
+
     return res.json({
       success: true,
       documentId,
@@ -51,6 +92,25 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       embeddings: embeddings.length,
     });
   } catch (error: any) {
+    const duration = parseFloat((performance.now() - start).toFixed(2));
+    logger.error("[ADMIN] Falha no upload/indexação de documento", error, {
+      requestId,
+      duration,
+      status: "error",
+      filename: fileName,
+    });
+
+    // Record failed indexing history
+    await indexingHistoryService.record({
+      document: fileName,
+      date: new Date().toISOString(),
+      duration: Math.round(duration),
+      chunks_count: 0,
+      embeddings_count: 0,
+      success: false,
+      error_message: error.message || String(error),
+    });
+
     next(error);
   }
 });
