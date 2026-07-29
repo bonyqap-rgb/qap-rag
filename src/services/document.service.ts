@@ -1,5 +1,9 @@
+import fs from "fs";
+import path from "path";
 import { DocumentRepository } from "../repositories/document.repository.js";
 import { Document, DocumentProcessingStatus } from "../models/document.model.js";
+import { readPdfWithMetadata } from "../pdf/readPdf.js";
+import { logger } from "./logger.service.js";
 
 export class ValidationError extends Error {
   status = 400;
@@ -180,6 +184,66 @@ export class DocumentService {
     const deleted = await this.repository.delete(id);
     if (!deleted) {
       throw new NotFoundError(`Documento com ID '${id}' não encontrado.`);
+    }
+  }
+
+  /**
+   * Processes a pending document: extracts text, counts pages, and updates its metadata
+   */
+  async processDocument(id: string): Promise<Document> {
+    if (!id) {
+      throw new ValidationError("O ID do documento não foi informado.");
+    }
+
+    const doc = await this.repository.getById(id);
+    if (!doc) {
+      throw new NotFoundError(`Documento com ID '${id}' não encontrado.`);
+    }
+
+    if (doc.processingStatus !== "pending") {
+      throw new ValidationError(`O documento com ID '${id}' já foi processado ou está em processamento (status atual: '${doc.processingStatus}').`);
+    }
+
+    // 1. Update status to "processing"
+    await this.repository.update(id, { processingStatus: "processing" });
+
+    const filePath = path.join("storage", "documents", doc.filename);
+
+    try {
+      // 2. Read physical file from local storage
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Arquivo físico não encontrado em: ${filePath}`);
+      }
+
+      const fileBuffer = await fs.promises.readFile(filePath);
+
+      // 3. Extract and normalize PDF text, and get page count
+      const { text, totalPages } = await readPdfWithMetadata(fileBuffer);
+
+      // 4. Update the database record with extracted_text, total_pages, and status = "completed"
+      const updatedDoc = await this.repository.update(id, {
+        totalPages,
+        extractedText: text,
+        processingStatus: "completed"
+      });
+
+      if (!updatedDoc) {
+        throw new Error("Falha ao salvar os metadados do documento processado.");
+      }
+
+      logger.info(`[DOCUMENT PROCESSING] Documento '${doc.title}' (ID: ${id}) processado com sucesso. Páginas: ${totalPages}`);
+      return updatedDoc;
+
+    } catch (error: any) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error(`[DOCUMENT PROCESSING ERROR] Erro ao processar o documento '${doc.title}' (ID: ${id}): ${errorMessage}`, error);
+
+      // 5. Update status to "failed" on error
+      await this.repository.update(id, { processingStatus: "failed" }).catch((dbErr) => {
+        logger.error(`[DOCUMENT PROCESSING ERROR] Falha ao atualizar status para 'failed' do documento '${id}': ${dbErr.message}`, dbErr);
+      });
+
+      throw new ValidationError(`Falha no processamento do PDF: ${errorMessage}`);
     }
   }
 }

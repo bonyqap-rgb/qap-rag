@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
+import fs from "fs";
+import path from "path";
 import { DocumentService, ValidationError, NotFoundError } from "./document.service.js";
 import { DocumentRepository } from "../repositories/document.repository.js";
 import { Document } from "../models/document.model.js";
@@ -101,6 +103,123 @@ test("DocumentService - getDocumentById() throws NotFoundError when not found", 
       return true;
     }
   );
+});
+
+test("DocumentService - processDocument() handles non-existent document ID", async () => {
+  const repo = new MockDocumentRepository();
+  repo.shouldFind = false;
+  const service = new DocumentService(repo);
+
+  await assert.rejects(
+    async () => {
+      await service.processDocument("non-existent-id");
+    },
+    (err: Error) => {
+      assert.ok(err instanceof NotFoundError);
+      return true;
+    }
+  );
+});
+
+test("DocumentService - processDocument() throws on non-pending document", async () => {
+  const repo = new MockDocumentRepository();
+  const service = new DocumentService(repo);
+
+  // Set sample document to already completed
+  repo.getById = async (id: string) => ({
+    ...sampleDocument,
+    id,
+    processingStatus: "completed"
+  });
+
+  await assert.rejects(
+    async () => {
+      await service.processDocument("completed-doc-id");
+    },
+    (err: Error) => {
+      assert.ok(err instanceof ValidationError);
+      assert.strictEqual(err.message.includes("já foi processado"), true);
+      return true;
+    }
+  );
+});
+
+test("DocumentService - processDocument() handles missing physical PDF file error", async () => {
+  const repo = new MockDocumentRepository();
+  const service = new DocumentService(repo);
+
+  // Set non-existent physical file name
+  repo.getById = async (id: string) => ({
+    ...sampleDocument,
+    id,
+    filename: "missing_file_xyz.pdf",
+    processingStatus: "pending"
+  });
+
+  let statusHistory: string[] = [];
+  repo.update = async (id: string, payload: any) => {
+    if (payload.processingStatus) {
+      statusHistory.push(payload.processingStatus);
+    }
+    return { ...sampleDocument, ...payload, id };
+  };
+
+  await assert.rejects(
+    async () => {
+      await service.processDocument("some-id");
+    },
+    (err: Error) => {
+      assert.ok(err instanceof ValidationError);
+      assert.strictEqual(err.message.includes("Falha no processamento"), true);
+      return true;
+    }
+  );
+
+  // Status transitions check: should have entered "processing" and then finished as "failed"
+  assert.strictEqual(statusHistory[0], "processing");
+  assert.strictEqual(statusHistory[1], "failed");
+});
+
+test("DocumentService - processDocument() successfully parses valid PDF and updates metadata", async () => {
+  const repo = new MockDocumentRepository();
+  const service = new DocumentService(repo);
+
+  const filename = "test_processing.pdf";
+  const testDocPath = path.join("storage", "documents", filename);
+
+  // Write a valid tiny 1-page PDF
+  fs.mkdirSync(path.dirname(testDocPath), { recursive: true });
+  fs.writeFileSync(testDocPath, "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << >> /Contents 4 0 R >>\nendobj\n4 0 obj\n<< >>\nstream\nBT /F1 12 Tf 100 700 Td (Hello World) Tj ET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000056 00000 n \n0000000111 00000 n \n0000000193 00000 n \ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n240\n%%EOF");
+
+  repo.getById = async (id: string) => ({
+    ...sampleDocument,
+    id,
+    filename,
+    processingStatus: "pending"
+  });
+
+  let lastPayload: any = null;
+  repo.update = async (id: string, payload: any) => {
+    lastPayload = payload;
+    return { ...sampleDocument, ...payload, id };
+  };
+
+  try {
+    const result = await service.processDocument("some-id");
+    assert.strictEqual(result.processingStatus, "completed");
+    assert.strictEqual(result.totalPages, 1);
+    assert.strictEqual(result.extractedText?.includes("Hello World"), true);
+
+    // Verify last payload matched DB commit
+    assert.strictEqual(lastPayload.processingStatus, "completed");
+    assert.strictEqual(lastPayload.totalPages, 1);
+    assert.strictEqual(lastPayload.extractedText?.includes("Hello World"), true);
+  } finally {
+    // Cleanup
+    if (fs.existsSync(testDocPath)) {
+      fs.unlinkSync(testDocPath);
+    }
+  }
 });
 
 test("DocumentService - createDocument() validates required fields", async () => {

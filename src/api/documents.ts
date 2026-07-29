@@ -30,6 +30,19 @@ router.get("/", async (_req: Request, res: Response, next: NextFunction) => {
 });
 
 /**
+ * POST /documents/:id/process
+ * Synchronously processes a pending document: extracts text, counts pages, and updates status.
+ */
+router.post("/:id/process", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const processedDoc = await documentService.processDocument(req.params.id as string);
+    return res.status(200).json(processedDoc);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /documents/upload
  * Uploads a PDF file, preserves metadata, stores it in storage/documents, and registers it.
  */

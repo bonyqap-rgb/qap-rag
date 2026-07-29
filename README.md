@@ -159,7 +159,33 @@ Faz o upload físico de um arquivo PDF, gerando um nome único no armazenamento 
 - **Resposta de Erro (`400 Bad Request`)**:
   - Se nenhum arquivo for enviado, se o arquivo enviado estiver vazio, se não for um arquivo PDF, ou se exceder o tamanho máximo de 50 MB.
 
-#### 4. Cadastrar Metadados de Documento (`POST /documents`)
+#### 4. Processar Documento PDF (`POST /documents/:id/process`)
+Executa o processamento síncrono de um documento PDF pendente (`pending`). Lê o arquivo físico do armazenamento local (`storage/documents`), extrai e normaliza todo o conteúdo textual, faz a contagem de páginas do documento, e atualiza os metadados e o status de processamento no banco de dados para `'completed'` (ou `'failed'` em caso de erro).
+- **Parâmetros de Rota**:
+  - `id` (UUID): ID do documento a ser processado.
+- **Resposta de Sucesso (`200 OK`)**: Retorna os metadados do documento atualizados após o processamento.
+  ```json
+  {
+    "id": "8c77be02-4ee3-455b-80df-67993a4bc4d4",
+    "title": "manual_procedimentos.pdf",
+    "category": "Geral",
+    "version": "1.0.0",
+    "source": "Upload",
+    "language": "pt-BR",
+    "filename": "f3b827ac-df82-4be3-8b27-4632bfdf3a2a.pdf",
+    "fileSize": 102400,
+    "mimeType": "application/pdf",
+    "totalPages": 15,
+    "processingStatus": "completed",
+    "extractedText": "[PAGE_MARKER:1]\nConteúdo extraído e normalizado da página 1...",
+    "createdAt": "2023-10-10T12:00:00Z",
+    "updatedAt": "2023-10-10T12:05:00Z"
+  }
+  ```
+- **Resposta de Erro (`400 Bad Request`)**: Se o documento já estiver processado ou em processamento, ou em caso de erro crítico no parsing do PDF.
+- **Resposta de Erro (`404 Not Found`)**: Se o documento não existir no banco de dados.
+
+#### 5. Cadastrar Metadados de Documento (`POST /documents`)
 Cadastra um novo registro de metadados para um documento.
 - **Corpo da Requisição (JSON)**:
   - `title` (obrigatório, string, máx 255 caracteres): Título amigável do documento.
@@ -175,7 +201,7 @@ Cadastra um novo registro de metadados para um documento.
 - **Resposta de Sucesso (`201 Created`)**: Retorna o documento criado com ID gerado e timestamps.
 - **Resposta de Erro (`400 Bad Request`)**: Erro de validação se algum campo obrigatório estiver ausente ou inválido.
 
-#### 5. Atualizar Metadados de Documento (`PATCH /documents/:id`)
+#### 6. Atualizar Metadados de Documento (`PATCH /documents/:id`)
 Atualiza parcialmente os metadados de um documento existente.
 - **Parâmetros de Rota**:
   - `id` (UUID): ID do documento.
@@ -184,7 +210,7 @@ Atualiza parcialmente os metadados de um documento existente.
 - **Resposta de Erro (`400 Bad Request`)**: Se algum dado de atualização violar as restrições de validação.
 - **Resposta de Erro (`404 Not Found`)**: Se o documento com o ID especificado não for encontrado.
 
-#### 6. Excluir Documento (`DELETE /documents/:id`)
+#### 7. Excluir Documento (`DELETE /documents/:id`)
 Exclui permanentemente o registro de um documento do banco de dados.
 - **Parâmetros de Rota**:
   - `id` (UUID): ID do documento.

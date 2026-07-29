@@ -202,6 +202,52 @@ test("API DELETE /documents/:id - returns 200 on successful deletion", async () 
   }
 });
 
+test("API POST /documents/:id/process - returns 200 and processed document metadata", async () => {
+  const originalProcess = documentService.processDocument;
+  documentService.processDocument = async (id: string) => ({
+    ...mockDoc,
+    id,
+    processingStatus: "completed",
+    totalPages: 10,
+    extractedText: "Mock Extracted Text"
+  });
+
+  try {
+    const res = await fetch(`${baseUrl}/${mockDoc.id}/process`, {
+      method: "POST"
+    });
+
+    assert.strictEqual(res.status, 200);
+    const body = await res.json() as Document;
+    assert.strictEqual(body.id, mockDoc.id);
+    assert.strictEqual(body.processingStatus, "completed");
+    assert.strictEqual(body.totalPages, 10);
+    assert.strictEqual(body.extractedText, "Mock Extracted Text");
+  } finally {
+    documentService.processDocument = originalProcess;
+  }
+});
+
+test("API POST /documents/:id/process - returns 400 when processing fails with ValidationError", async () => {
+  const originalProcess = documentService.processDocument;
+  documentService.processDocument = async (id: string) => {
+    throw new ValidationError("O documento já foi processado.");
+  };
+
+  try {
+    const res = await fetch(`${baseUrl}/${mockDoc.id}/process`, {
+      method: "POST"
+    });
+
+    assert.strictEqual(res.status, 400);
+    const body = await res.json() as any;
+    assert.strictEqual(body.error, "ERROR");
+    assert.strictEqual(body.message.includes("já foi processado"), true);
+  } finally {
+    documentService.processDocument = originalProcess;
+  }
+});
+
 test("API POST /documents/upload - uploads valid PDF successfully", async () => {
   const originalCreate = documentService.createDocument;
   documentService.createDocument = async (payload: any) => ({

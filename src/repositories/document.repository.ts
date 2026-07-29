@@ -70,7 +70,7 @@ export class DocumentRepository {
    */
   async update(
     id: string,
-    doc: Partial<Omit<Document, "id" | "createdAt" | "updatedAt" | "filename" | "fileSize" | "mimeType" | "totalPages">>
+    doc: Partial<Omit<Document, "id" | "createdAt" | "updatedAt">>
   ): Promise<Document | null> {
     const dbPayload = mapDocumentToDb(doc);
     dbPayload.updated_at = new Date().toISOString();

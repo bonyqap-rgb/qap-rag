@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS public.documents (
     mime_type VARCHAR(100) NOT NULL,
     total_pages INTEGER NOT NULL,
     processing_status VARCHAR(50) NOT NULL DEFAULT 'pending',
+    extracted_text TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
 

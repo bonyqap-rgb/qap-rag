@@ -38,3 +38,44 @@ export async function readPdf(buffer: Buffer): Promise<string> {
 
   return text.trim();
 }
+
+/**
+ * Extracts and normalizes text from a PDF buffer page-by-page, returning both the extracted text and the total pages.
+ *
+ * @param buffer - The PDF file buffer
+ * @returns Object containing the extracted text and the total pages count
+ */
+export async function readPdfWithMetadata(buffer: Buffer): Promise<{ text: string; totalPages: number }> {
+  const pdf = await pdfjsLib.getDocument({
+    data: new Uint8Array(buffer),
+  }).promise;
+
+  const totalPages = pdf.numPages;
+  let text = "";
+
+  for (let i = 1; i <= totalPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+
+    // Joint strings with space
+    const pageRaw = content.items
+      .map((item: any) => item.str)
+      .join(" ");
+
+    // Remove control/non-printable characters, preserve carriage returns and standard punctuation
+    let normalized = pageRaw
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "") // non-printable ascii
+      .replace(/\s+/g, " ") // duplicate whitespace collapse
+      .trim();
+
+    if (normalized.length > 0) {
+      // Embed page marker for the semantic chunker to parse and extract metadata
+      text += `[PAGE_MARKER:${i}]\n${normalized}\n\n`;
+    }
+  }
+
+  return {
+    text: text.trim(),
+    totalPages
+  };
+}
