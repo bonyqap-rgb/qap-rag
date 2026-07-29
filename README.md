@@ -167,9 +167,81 @@ Exclui permanentemente o registro de um documento do banco de dados.
 
 ---
 
+## 🔍 Busca Semântica e Recuperação de Contexto (Semantic Search & Context Retrieval)
+
+O sistema conta com um pipeline de busca semântica robusto e de alta precisão que realiza a recuperação de contexto utilizando os vetores armazenados no Supabase pgvector.
+
+### 📋 Fluxo de Recuperação
+
+```
+  [ Pergunta do Usuário ]
+            │
+            ▼
+ [ Embedding da Pergunta ] (Gemini API: gemini-embedding-001)
+            │
+            ▼
+  [ Busca Vetorial RPC ] (Supabase pgvector: match_documents)
+            │
+            ├─► Filtros de Metadados Opcionais (documentId, category, documentType)
+            │
+            ▼
+    [ Top-K Resultados ] (Filtrados por score mínimo e desduplicados)
+            │
+            ▼
+    [ Context Builder ] (Ordena por documento/índice, limita tamanho máximo)
+            │
+            ▼
+  [ Retorno Estruturado ] (Results + Contexto unificado)
+```
+
+### 🛣️ Endpoint de Busca Semântica
+
+#### `POST /search`
+Realiza a busca semântica na base de conhecimento e retorna os trechos mais relevantes juntamente com o contexto textual unificado e limpo.
+
+- **Corpo da Requisição (JSON)**:
+  - `query` (obrigatório, string): Pergunta ou termo de busca.
+  - `topK` (opcional, número, padrão `5`): Quantidade máxima de resultados a retornar.
+  - `scoreThreshold` (opcional, número, padrão `0.3`): Nota de corte de similaridade mínima (cosina).
+  - `filters` (opcional, objeto):
+    - `documentId` (opcional, UUID): ID do documento específico.
+    - `category` (opcional, string): Filtrar por categoria do documento.
+    - `documentType` (opcional, string): Filtrar pelo tipo de documento (MIME type como `application/pdf`).
+
+##### Exemplo de Requisição:
+```json
+{
+  "query": "Qual o procedimento para policiamento ostensivo?",
+  "topK": 3,
+  "scoreThreshold": 0.5,
+  "filters": {
+    "category": "Segurança Pública"
+  }
+}
+```
+
+##### Exemplo de Resposta de Sucesso (`200 OK`):
+```json
+{
+  "query": "Qual o procedimento para policiamento ostensivo?",
+  "results": [
+    {
+      "documentId": "8c77be02-4ee3-455b-80df-67993a4bc4d4",
+      "chunkIndex": 12,
+      "score": 0.9345,
+      "text": "O policiamento ostensivo deve seguir as diretrizes de proximidade comunitária..."
+    }
+  ],
+  "context": "O policiamento ostensivo deve seguir as diretrizes de proximidade comunitária..."
+}
+```
+
+---
+
 ## 🧪 Testes Automatizados
 
-A suíte de testes unitários integrada sob o runner nativo do Node.js cobre as lógicas cruciais de chunking, marcações semânticas de página, regras de repositório, validações do serviço de documentos e as rotas de API Express.
+A suíte de testes unitários integrada sob o runner nativo do Node.js cobre as lógicas cruciais de chunking, marcações semânticas de página, regras de repositório, validações do serviço de documentos, busca semântica, montagem do contexto e as rotas de API Express.
+
 Para executar localmente:
 ```bash
 npm test

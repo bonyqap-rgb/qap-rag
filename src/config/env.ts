@@ -10,6 +10,9 @@ interface EnvVariables {
   OPENROUTER_API_KEY: string;
   NODE_ENV: string;
   PORT: number;
+  DEFAULT_TOP_K: number;
+  DEFAULT_MIN_SCORE: number;
+  DEFAULT_MAX_CONTEXT_SIZE: number;
 }
 
 function validateEnv(): EnvVariables {
@@ -41,6 +44,9 @@ function validateEnv(): EnvVariables {
     OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY!,
     NODE_ENV: process.env.NODE_ENV || "development",
     PORT: process.env.PORT ? parseInt(process.env.PORT, 10) : 3001,
+    DEFAULT_TOP_K: process.env.DEFAULT_TOP_K ? parseInt(process.env.DEFAULT_TOP_K, 10) : 5,
+    DEFAULT_MIN_SCORE: process.env.DEFAULT_MIN_SCORE ? parseFloat(process.env.DEFAULT_MIN_SCORE) : 0.3,
+    DEFAULT_MAX_CONTEXT_SIZE: process.env.DEFAULT_MAX_CONTEXT_SIZE ? parseInt(process.env.DEFAULT_MAX_CONTEXT_SIZE, 10) : 4000,
   };
 }
 
