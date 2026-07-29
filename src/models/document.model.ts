@@ -1,4 +1,4 @@
-export type DocumentProcessingStatus = "pending" | "processing" | "completed" | "failed";
+export type DocumentProcessingStatus = "pending" | "processing" | "completed" | "failed" | "indexed";
 
 export interface Document {
   id: string;
@@ -12,6 +12,7 @@ export interface Document {
   mimeType: string;
   totalPages: number;
   processingStatus: DocumentProcessingStatus;
+  extractedText?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -28,6 +29,7 @@ export interface DbDocument {
   mime_type: string;
   total_pages: number;
   processing_status: DocumentProcessingStatus;
+  extracted_text?: string;
   created_at: string;
   updated_at: string;
 }
@@ -48,6 +50,7 @@ export function mapDbToDocument(dbDoc: DbDocument): Document {
     mimeType: dbDoc.mime_type,
     totalPages: dbDoc.total_pages,
     processingStatus: dbDoc.processing_status,
+    extractedText: dbDoc.extracted_text,
     createdAt: dbDoc.created_at,
     updatedAt: dbDoc.updated_at,
   };
@@ -69,6 +72,7 @@ export function mapDocumentToDb(doc: Partial<Document>): Partial<DbDocument> {
   if (doc.mimeType !== undefined) dbDoc.mime_type = doc.mimeType;
   if (doc.totalPages !== undefined) dbDoc.total_pages = doc.totalPages;
   if (doc.processingStatus !== undefined) dbDoc.processing_status = doc.processingStatus;
+  if (doc.extractedText !== undefined) dbDoc.extracted_text = doc.extractedText;
   if (doc.createdAt !== undefined) dbDoc.created_at = doc.createdAt;
   if (doc.updatedAt !== undefined) dbDoc.updated_at = doc.updatedAt;
   return dbDoc;

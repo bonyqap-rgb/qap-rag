@@ -174,3 +174,62 @@ Para executar localmente:
 ```bash
 npm test
 ```
+
+---
+
+## 🚀 Pipeline de Indexação Vetorial (Módulo de Indexação)
+
+Esta funcionalidade implementa o pipeline completo de indexação vetorial, que pega o texto extraído de um documento já processado, divide em chunks semânticos, gera os embeddings vetoriais com o Google Gemini e armazena os vetores no banco de dados Supabase pgvector, gerenciando o status do processamento.
+
+### 📋 Fluxo da Pipeline de Indexação
+O processamento segue rigorosamente as seguintes transições de estado:
+1. **Pending**: Estado inicial quando o documento é cadastrado ou enviado.
+2. **Processing**: Estado ativado assim que a pipeline de indexação é iniciada para o ID fornecido.
+3. **Indexed**: Status final de sucesso após gerar os embeddings de todos os chunks e inseri-los no banco vetorial.
+4. **Failed**: Status atribuído caso ocorra qualquer erro temporário, limite de taxa (rate-limit) ou falha no fluxo. O erro é registrado detalhadamente no console.
+
+### ⚙️ Variáveis de Ambiente Necessárias
+As seguintes variáveis devem estar configuradas no seu arquivo `.env`:
+- `GOOGLE_API_KEY`: Chave de API oficial do Google Gemini para geração de embeddings.
+- `SUPABASE_URL`: Endpoint de conexão com o banco de dados Supabase.
+- `SUPABASE_SERVICE_ROLE_KEY`: Chave de serviço (Service Role) com permissões administrativas para inserções.
+
+### 📂 Estrutura de Arquivos Criada
+```
+src/services/
+├── chunker/
+│   └── chunker.service.ts     <- Divisão semântica de texto com chunkSize e overlap configuráveis
+├── embedding/
+│   └── embedding.service.ts   <- Geração de embeddings com a API oficial do Google Gemini
+├── vector/
+│   └── vector.service.ts      <- Persistência robusta de vetores no Supabase pgvector
+├── indexer/
+│   └── indexer.service.ts     <- Coordenação central de todo o fluxo de indexação
+└── indexer.test.ts            <- Testes automatizados robustos de todas as etapas e tratamento de erros
+```
+
+### 📡 Novo Endpoint de API
+
+#### Iniciar Indexação de Documento (`POST /documents/:id/index`)
+Inicia de forma assíncrona/síncrona o pipeline completo para um documento previamente cadastrado que possua o texto no campo `extractedText`.
+- **Parâmetro de Rota**:
+  - `id` (UUID): ID do documento no banco.
+- **Resposta de Sucesso (`200 OK`)**:
+  ```json
+  {
+    "success": true,
+    "message": "Processo de indexação concluído com sucesso."
+  }
+  ```
+- **Resposta de Erro (`400 Bad Request` / `404 Not Found` / `500 Error`)**:
+  Em caso de falha, retorna a mensagem detalhada formatada pelo middleware global de erros.
+
+### 🧪 Como Executar os Testes da Pipeline
+Para rodar especificamente os testes criados para a pipeline de indexação:
+```bash
+SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_ROLE_KEY=dummy_key GOOGLE_API_KEY=dummy_key OPENROUTER_API_KEY=dummy_key node --import tsx --test src/services/indexer.test.ts
+```
+Ou execute toda a suíte de testes com o atalho:
+```bash
+npm test
+```
