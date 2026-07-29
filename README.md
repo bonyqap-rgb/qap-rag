@@ -68,18 +68,95 @@ O fluxo de processamento e recuperação semântica de documentos do sistema seg
 - **Citação Explícita de Fontes**: O prompt inclui tags estruturadas (ex: `[Fonte: doc.pdf, Página: 2]`), orientando o modelo a incluir as devidas referências em sua resposta final.
 
 ### 7. Payload de API Rico e Retrocompatível (`src/api/chat.ts`)
-- Mantém chaves antigas (`success`, `documents`, `answer`), mas agora retorna metadados completos de citação ao cliente:
-  ```json
-  {
-    "success": true,
-    "answer": "...",
-    "documents": 3,
-    "confidenceScore": 0.8423,
-    "retrievedSources": ["lei_pm_sp.pdf"],
-    "pageNumbers": [1, 3],
-    "retrievedChunkIdentifiers": ["doc_123_chunk_0", "doc_123_chunk_2"]
+- Retorna uma resposta estruturada robusta contendo tanto a resposta quanto as referências explícitas das fontes em um formato limpo preparado para o frontend.
+
+---
+
+## 💬 Fluxo Principal de Chat e Integração com LLM (RAG Chat Flow)
+
+O fluxo principal do QAP IA orquestra a busca semântica, a montagem do contexto limitando seu tamanho máximo e a interação resiliente com o Gemini através do OpenRouter.
+
+### 📋 Sequência Completa do RAG
+
+```
+   [ Pergunta do Usuário (message) ]
+                 │
+                 ▼
+     [ Validação de Entrada ]
+                 │
+                 ▼
+       [ Busca Semântica ] (SearchService.search) -> Retorna chunks relevantes e scores
+                 │
+                 ▼
+     [ Recuperar Nomes de Documentos ] (Filtra metadados e lê de knowledge_documents)
+                 │
+                 ▼
+      [ Construtor de Contexto ] (Deduplica, ordena e limita tamanho do contexto)
+                 │
+                 ▼
+       [ Construtor de Prompt ] (Separa systemPrompt das instruções do usuário)
+                 │
+                 ▼
+ [ Gemini / OpenRouter API Call ] (chatWithContextConfigurable com timeouts e retries)
+                 │
+                 ▼
+    [ Resposta Estruturada + Logs ] (Retorna resposta, fontes reais utilizadas e tempos)
+```
+
+### 🛣️ Endpoint do Chat
+
+#### `POST /chat`
+Realiza a orquestração completa do fluxo RAG e retorna uma resposta fundamentada nas fontes de conhecimento encontradas.
+
+- **Corpo da Requisição (JSON)**:
+  - `message` (obrigatório, string): Pergunta ou mensagem do usuário.
+  - `temperature` (opcional, número, padrão `0`): Temperatura de geração da resposta.
+  - `topK` (opcional, número, padrão `5`): Quantidade de chunks retornados para compor o contexto.
+  - `maxContextSize` (opcional, número, padrão `4000`): Limite máximo em caracteres do contexto de suporte.
+  - `timeout` (opcional, número, padrão `25000`): Limite de tempo em milissegundos para a API do Gemini.
+  - `model` (opcional, string, padrão `"openai/gpt-4.1-mini"`): Modelo para geração via OpenRouter.
+  - `filters` (opcional, objeto): Filtros de metadados (como `documentId`, `category`, `documentType`).
+
+##### Exemplo de Requisição:
+```json
+{
+  "message": "Qual é o procedimento para policiamento comunitário?",
+  "temperature": 0.2,
+  "topK": 4
+}
+```
+
+##### Exemplo de Resposta de Sucesso (`200 OK`):
+```json
+{
+  "answer": "O policiamento comunitário foca no engajamento social e proximidade com o cidadão, conforme as diretrizes estabelecidas. [doc: manual_pm.pdf, pág: 3].",
+  "sources": [
+    {
+      "documentId": "8c77be02-4ee3-455b-80df-67993a4bc4d4",
+      "filename": "manual_pm.pdf",
+      "chunkIndex": 3,
+      "score": 0.94
+    }
+  ],
+  "metadata": {
+    "searchTime": "120ms",
+    "generationTime": "1530ms",
+    "totalTime": "1650ms"
   }
-  ```
+}
+```
+
+### ⚙️ Variáveis de Ambiente Configuráveis
+
+O sistema suporta as seguintes variáveis de ambiente essenciais para o fluxo RAG:
+- `SUPABASE_URL`: URL da API do Supabase.
+- `SUPABASE_SERVICE_ROLE_KEY`: Chave de acesso administrativo do Supabase.
+- `GOOGLE_API_KEY`: API Key para embeddings do Google Gemini.
+- `OPENROUTER_API_KEY`: API Key do OpenRouter para chat completion.
+- `PORT`: Porta de escuta do servidor Express (padrão `3001`).
+- `DEFAULT_TOP_K`: Quantidade padrão de chunks recuperados por padrão (padrão `5`).
+- `DEFAULT_MIN_SCORE`: Score de similaridade mínimo exigido nas buscas (padrão `0.3`).
+- `DEFAULT_MAX_CONTEXT_SIZE`: Tamanho máximo em caracteres do contexto unificado (padrão `4000`).
 
 ---
 

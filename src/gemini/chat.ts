@@ -14,7 +14,7 @@ const client = new OpenAI({
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`Operação excedeu o tempo limite de ${timeoutMs}ms`));
+      reject(new Error("Operação excedeu o tempo limite de " + timeoutMs + "ms"));
     }, timeoutMs);
 
     promise
@@ -54,22 +54,25 @@ async function retryWithBackoff<T>(
 }
 
 /**
- * Interacts with the LLM via OpenRouter to complete a prompt with context.
- * Strictly instructs the model to only use the retrieved context, and reference sources explicitly.
- *
- * @param question - The user's question
- * @param context - Formatted contextual documents with metadata tags
- * @returns The generated response string
+ * Default internal implementation for chat completion.
  */
-export async function chatWithContext(
+async function defaultChatImplementation(
   question: string,
-  context: string
+  context: string,
+  options: {
+    model?: string;
+    temperature?: number;
+    timeout?: number;
+    retries?: number;
+    systemPrompt?: string;
+    userPrompt?: string;
+  } = {}
 ): Promise<string> {
   if (!question || question.trim() === "") {
     throw new Error("A pergunta não pode ser vazia.");
   }
 
-  const systemPrompt = `Você é um especialista da Polícia Militar do Estado de São Paulo.
+  const systemPrompt = options.systemPrompt || `Você é um especialista da Polícia Militar do Estado de São Paulo.
 
 Responda a pergunta do usuário baseando-se EXCLUSIVAMENTE no CONTEXTO fornecido abaixo.
 
@@ -78,16 +81,21 @@ Se a resposta não puder ser encontrada no contexto fornecido, responda exatamen
 
 Ao responder, faça referências explícitas às fontes do contexto utilizadas (por exemplo: "[doc: documento.pdf, pág: 3]").`;
 
-  const userPrompt = `CONTEXTO DE SUPORTE:
+  const userPrompt = options.userPrompt || `CONTEXTO DE SUPORTE:
 ${context || "Nenhum contexto encontrado."}
 
 PERGUNTA:
 ${question}`;
 
+  const model = options.model || "openai/gpt-4.1-mini";
+  const temperature = options.temperature !== undefined ? options.temperature : 0;
+  const timeoutLimit = options.timeout || 25000;
+  const retryCount = options.retries !== undefined ? options.retries : 3;
+
   const apiCall = () =>
     withTimeout(
       client.chat.completions.create({
-        model: "openai/gpt-4.1-mini",
+        model,
         messages: [
           {
             role: "system",
@@ -98,12 +106,12 @@ ${question}`;
             content: userPrompt,
           },
         ],
-        temperature: 0,
+        temperature,
       }),
-      25000 // 25 second timeout limit
+      timeoutLimit
     );
 
-  const completion = await retryWithBackoff(apiCall, 3, 1000);
+  const completion = await retryWithBackoff(apiCall, retryCount, 1000);
 
   const answer = completion.choices[0]?.message?.content;
 
@@ -112,4 +120,49 @@ ${question}`;
   }
 
   return answer.trim();
+}
+
+// Live binding/re-assignment container for tests in ESM
+let chatImplementation = defaultChatImplementation;
+
+export function setChatImplementation(fn: typeof defaultChatImplementation) {
+  chatImplementation = fn;
+}
+
+export function resetChatImplementation() {
+  chatImplementation = defaultChatImplementation;
+}
+
+/**
+ * Highly configurable chat completion function interfacing with OpenRouter/Gemini.
+ */
+export async function chatWithContextConfigurable(
+  question: string,
+  context: string,
+  options: {
+    model?: string;
+    temperature?: number;
+    timeout?: number;
+    retries?: number;
+    systemPrompt?: string;
+    userPrompt?: string;
+  } = {}
+): Promise<string> {
+  return chatImplementation(question, context, options);
+}
+
+/**
+ * Interacts with the LLM via OpenRouter to complete a prompt with context.
+ * Strictly instructs the model to only use the retrieved context, and reference sources explicitly.
+ * Backward compatible wrapper over chatWithContextConfigurable.
+ *
+ * @param question - The user's question
+ * @param context - Formatted contextual documents with metadata tags
+ * @returns The generated response string
+ */
+export async function chatWithContext(
+  question: string,
+  context: string
+): Promise<string> {
+  return chatWithContextConfigurable(question, context);
 }
