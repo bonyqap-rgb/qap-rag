@@ -9,6 +9,7 @@ import { logger } from "./services/logger.service.js";
 import uploadRouter from "./api/upload.js";
 import chatRouter from "./api/chat.js";
 import documentsRouter from "./api/documents.js";
+import searchRouter from "./api/search.js";
 
 // 1. Startup Logging - Environment validation confirmation
 logger.info(`[STARTUP] Variáveis de ambiente validadas com sucesso. Ambiente: ${env.NODE_ENV}`);
@@ -109,6 +110,7 @@ app.post("/teste", (req, res) => {
 app.use("/upload", uploadRouter);
 app.use("/chat", chatRouter);
 app.use("/documents", documentsRouter);
+app.use("/search", searchRouter);
 
 // Enhanced /health endpoint according to requirements
 app.get("/health", async (_, res) => {
