@@ -48,7 +48,7 @@ test("GET /health - returns basic status successfully", async () => {
   assert.strictEqual(data.status, "ok");
   assert.strictEqual(data.version, "1.0");
   assert.strictEqual(data.database, "connected");
-  assert.strictEqual(data.gemini, "connected");
+  assert.strictEqual(data.groq, "connected");
 });
 
 test("GET /ready - returns deep readiness status details", async () => {
@@ -60,4 +60,5 @@ test("GET /ready - returns deep readiness status details", async () => {
   assert.strictEqual(data.database.status, "ok");
   assert.strictEqual(data.pgvector.status, "ok");
   assert.strictEqual(data.config.status, "ok");
+  assert.strictEqual(data.groq_api.status, "error"); // due to GROQ_API_KEY being 'dummy_key' in test environment
 });

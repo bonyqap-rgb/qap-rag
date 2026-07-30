@@ -1,6 +1,6 @@
 import { supabase } from "../config/supabase.js";
 import { env } from "../config/env.js";
-import { createEmbedding } from "../gemini/embed.js";
+import { createEmbedding } from "../groq/embed.js";
 import { logger } from "./logger.service.js";
 import { metricsService } from "./metrics.service.js";
 

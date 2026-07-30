@@ -7,7 +7,7 @@ import { supabase } from "../config/supabase.js";
 import { SearchService } from "./search.service.js";
 import { ContextBuilderService } from "./context-builder.service.js";
 
-import { setEmbeddingImplementation, resetEmbeddingImplementation } from "../gemini/embed.js";
+import { setEmbeddingImplementation, resetEmbeddingImplementation } from "../groq/embed.js";
 
 // Stub the embedding implementation directly for consistent and fast mock vectors
 setEmbeddingImplementation(async (text) => {
