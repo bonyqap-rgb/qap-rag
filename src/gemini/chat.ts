@@ -88,7 +88,7 @@ ${context || "Nenhum contexto encontrado."}
 PERGUNTA:
 ${question}`;
 
-  const model = options.model && !options.model.includes("openai") && !options.model.includes("openrouter") ? options.model : "gemini-2.5-flash";
+  const model = options.model && !options.model.includes("openai") && !options.model.includes("openrouter") ? options.model : env.DEFAULT_CHAT_MODEL;
   const temperature = options.temperature !== undefined ? options.temperature : 0;
   const timeoutLimit = options.timeout || env.LLM_TIMEOUT;
   const retryCount = options.retries !== undefined ? options.retries : env.LLM_RETRIES;
