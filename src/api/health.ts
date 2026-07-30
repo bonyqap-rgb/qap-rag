@@ -23,17 +23,17 @@ router.get("/health", async (_, res) => {
     databaseStatus = "disconnected";
   }
 
-  const isDummy = env.GEMINI_API_KEY === "dummy_key";
+  const isDummy = env.GROQ_API_KEY === "dummy_key";
   const isProd = env.NODE_ENV === "production";
-  const geminiStatus = (env.GEMINI_API_KEY && (!isProd || !isDummy)) ? "connected" : "disconnected";
+  const groqStatus = (env.GROQ_API_KEY && (!isProd || !isDummy)) ? "connected" : "disconnected";
 
-  const isOk = databaseStatus === "connected" && geminiStatus === "connected";
+  const isOk = databaseStatus === "connected" && groqStatus === "connected";
 
   return res.status(isOk ? 200 : 503).json({
     status: isOk ? "ok" : "error",
     version: "1.0",
     database: databaseStatus,
-    gemini: geminiStatus,
+    groq: groqStatus,
   });
 });
 
@@ -47,20 +47,20 @@ router.get("/ready", async (_, res) => {
     database: { status: "ok" | "error"; message?: string };
     pgvector: { status: "ok" | "error"; message?: string };
     config: { status: "ok" | "error"; message?: string };
-    google_api: { status: "ok" | "error"; message?: string };
+    groq_api: { status: "ok" | "error"; message?: string };
   } = {
     status: "ok",
     database: { status: "ok" },
     pgvector: { status: "ok" },
     config: { status: "ok" },
-    google_api: { status: "ok" },
+    groq_api: { status: "ok" },
   };
 
   // 1. Verify environment configs
   const missingConfigs = [];
   if (!env.SUPABASE_URL) missingConfigs.push("SUPABASE_URL");
   if (!env.SUPABASE_SERVICE_ROLE_KEY) missingConfigs.push("SUPABASE_SERVICE_ROLE_KEY");
-  if (!env.GEMINI_API_KEY) missingConfigs.push("GEMINI_API_KEY");
+  if (!env.GROQ_API_KEY) missingConfigs.push("GROQ_API_KEY");
 
   if (missingConfigs.length > 0) {
     readinessDetails.status = "error";
@@ -70,12 +70,13 @@ router.get("/ready", async (_, res) => {
     };
   }
 
-  // 2. Verify Google GenAI API Key availability
-  if (!env.GEMINI_API_KEY || env.GEMINI_API_KEY === "dummy_key") {
-    readinessDetails.google_api = {
-      status: "error",
-      message: "GEMINI_API_KEY ausente ou configurado com chave dummy",
+  // 2. Verify Groq API Key availability
+  if (!env.GROQ_API_KEY || env.GROQ_API_KEY === "dummy_key") {
+    const errorDetails = {
+      status: "error" as const,
+      message: "GROQ_API_KEY ausente ou configurado com chave dummy",
     };
+    readinessDetails.groq_api = errorDetails;
     if (env.NODE_ENV === "production") {
       readinessDetails.status = "error";
     }

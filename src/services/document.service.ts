@@ -1,7 +1,7 @@
 import { DocumentRepository } from "../repositories/document.repository.js";
 import { Document, DocumentProcessingStatus } from "../models/document.model.js";
 import { supabase } from "../config/supabase.js";
-import { createEmbedding } from "../gemini/embed.js";
+import { createEmbedding } from "../groq/embed.js";
 import { indexingHistoryService } from "./indexing-history.service.js";
 import { logger } from "./logger.service.js";
 

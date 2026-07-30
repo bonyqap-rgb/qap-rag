@@ -2,7 +2,7 @@ import { env } from "../config/env.js";
 import { SearchService } from "./search.service.js";
 import { ContextBuilderService } from "./context-builder.service.js";
 import { PromptBuilderService } from "./prompt-builder.service.js";
-import { chatWithContextConfigurable } from "../gemini/chat.js";
+import { chatWithContextConfigurable } from "../groq/chat.js";
 import { supabase } from "../config/supabase.js";
 import { logger } from "./logger.service.js";
 import { metricsService } from "./metrics.service.js";
@@ -41,7 +41,7 @@ export interface ChatResponse {
 export class ChatService {
   /**
    * Orchestrates the complete RAG flow:
-   * Pergunta -> Geração de embedding -> Busca semântica -> Recuperar contexto -> Montar prompt -> Gemini -> Resposta estruturada
+   * Pergunta -> Geração de embedding -> Busca semântica -> Recuperar contexto -> Montar prompt -> Groq -> Resposta estruturada
    *
    * @param question - User question
    * @param options - Custom configuration overrides
@@ -65,9 +65,9 @@ export class ChatService {
     const maxContextSize = options.maxContextSize !== undefined ? options.maxContextSize : (env.DEFAULT_MAX_CONTEXT_SIZE ?? 4000);
     const temperature = options.temperature !== undefined ? options.temperature : 0;
     const timeout = options.timeout !== undefined ? options.timeout : 25000;
-    let model = options.model !== undefined ? options.model : "openai/gpt-4.1-mini";
-    if (model.includes("gemini-2.5")) {
-      model = "gemini-2.0-flash";
+    let model = options.model !== undefined ? options.model : env.DEFAULT_CHAT_MODEL;
+    if (model.includes("gemini")) {
+      model = env.DEFAULT_CHAT_MODEL;
     }
 
     // 2. Perform Semantic Search
@@ -182,7 +182,7 @@ export class ChatService {
     const systemPrompt = PromptBuilderService.buildSystemPrompt();
     const userPrompt = PromptBuilderService.buildUserPrompt(question, context);
 
-    // 7. Invoke LLM Gemini API
+    // 7. Invoke LLM Groq API
     const generationStartTime = performance.now();
     let answer = "";
     try {
@@ -199,7 +199,7 @@ export class ChatService {
       const err = new Error(
         isTimeout
           ? `O tempo limite de processamento de ${timeout}ms foi excedido.`
-          : `Falha ao gerar resposta do Gemini: ${error.message}`
+          : `Falha ao gerar resposta do Groq: ${error.message}`
       );
       (err as any).status = isTimeout ? 504 : 502;
       throw err;

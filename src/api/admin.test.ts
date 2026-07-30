@@ -1,6 +1,6 @@
 process.env.SUPABASE_URL = "http://localhost:54321";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "dummy_key";
-process.env.GEMINI_API_KEY = "dummy_key";
+process.env.GROQ_API_KEY = "dummy_key";
 import { test, after } from "node:test";
 import assert from "node:assert";
 import express from "express";
@@ -12,26 +12,12 @@ import { indexingHistoryService } from "../services/indexing-history.service.js"
 import { metricsService } from "../services/metrics.service.js";
 import { errorHandler } from "../middlewares/error.middleware.js";
 
-// Mock global fetch to intercept Google GenAI embedding API calls
-const originalFetch = globalThis.fetch;
-globalThis.fetch = async (url: any, options: any) => {
-  const urlStr = typeof url === "string" ? url : (url?.url || String(url));
-  if (urlStr.includes("generativelanguage.googleapis.com")) {
-    return {
-      ok: true,
-      status: 200,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ({
-        embeddings: [
-          {
-            values: Array(1536).fill(0.1)
-          }
-        ]
-      })
-    } as any;
-  }
-  return originalFetch(url, options);
-};
+import { setEmbeddingImplementation, resetEmbeddingImplementation } from "../groq/embed.js";
+
+// Stub the embedding implementation directly for consistent and fast mock vectors
+setEmbeddingImplementation(async (text) => {
+  return Array(1536).fill(0.1);
+});
 
 // Setup mock express server
 const app = express();
@@ -49,7 +35,6 @@ const metricsUrl = `http://localhost:${port}/metrics`;
 
 after(() => {
   server.close();
-  globalThis.fetch = originalFetch;
 });
 
 test("API GET /metrics - returns current metrics and count of indexed documents", async () => {

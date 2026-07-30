@@ -1,12 +1,12 @@
 process.env.SUPABASE_URL = "http://localhost:54321";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "dummy_key";
-process.env.GEMINI_API_KEY = "dummy_key";
+process.env.GROQ_API_KEY = "dummy_key";
 import { test } from "node:test";
 import assert from "node:assert";
 import { ChatService } from "./chat.service.js";
 import { SearchService } from "./search.service.js";
 import { ContextBuilderService } from "./context-builder.service.js";
-import { setChatImplementation, resetChatImplementation } from "../gemini/chat.js";
+import { setChatImplementation, resetChatImplementation } from "../groq/chat.js";
 import { supabase } from "../config/supabase.js";
 
 test("ChatService.chat - full flow with context found", async () => {
@@ -84,7 +84,7 @@ test("ChatService.chat - context empty scenario", async () => {
   }
 });
 
-test("ChatService.chat - Gemini failure scenario", async () => {
+test("ChatService.chat - Groq failure scenario", async () => {
   const originalSearch = SearchService.search;
   SearchService.search = async () => [
     {
@@ -119,7 +119,7 @@ test("ChatService.chat - Gemini failure scenario", async () => {
       () => ChatService.chat("teste de erro"),
       (err: any) => {
         assert.strictEqual(err.status, 502);
-        assert.ok(err.message.includes("Falha ao gerar resposta do Gemini: API Key inválida"));
+        assert.ok(err.message.includes("Falha ao gerar resposta do Groq: API Key inválida"));
         return true;
       }
     );
@@ -187,7 +187,7 @@ test("ChatService.chat - input validation empty question", async () => {
   );
 });
 
-test("ChatService.chat - gemini-2.5-flash model sanitization and fallback", async () => {
+test("ChatService.chat - unsupported model sanitization and fallback to default Groq model", async () => {
   const originalSearch = SearchService.search;
   SearchService.search = async () => [
     {
@@ -221,11 +221,11 @@ test("ChatService.chat - gemini-2.5-flash model sanitization and fallback", asyn
 
   try {
     const res = await ChatService.chat("teste de sanitização", {
-      model: "models/gemini-2.5-flash",
+      model: "models/unsupported-gemini-model",
     });
 
     assert.strictEqual(res.answer, "Resposta mockada.");
-    assert.strictEqual(capturedModel, "gemini-2.0-flash");
+    assert.strictEqual(capturedModel, "llama-3.3-70b-versatile");
   } finally {
     SearchService.search = originalSearch;
     supabase.from = originalFrom;

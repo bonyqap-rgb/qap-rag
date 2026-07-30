@@ -1,6 +1,6 @@
 process.env.SUPABASE_URL = "http://localhost:54321";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "dummy_key";
-process.env.GEMINI_API_KEY = "dummy_key";
+process.env.GROQ_API_KEY = "dummy_key";
 import { test, after } from "node:test";
 import assert from "node:assert";
 import express from "express";
@@ -48,7 +48,7 @@ test("GET /health - returns basic status successfully", async () => {
   assert.strictEqual(data.status, "ok");
   assert.strictEqual(data.version, "1.0");
   assert.strictEqual(data.database, "connected");
-  assert.strictEqual(data.gemini, "connected");
+  assert.strictEqual(data.groq, "connected");
 });
 
 test("GET /ready - returns deep readiness status details", async () => {

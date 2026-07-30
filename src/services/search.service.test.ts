@@ -1,32 +1,21 @@
 process.env.SUPABASE_URL = "http://localhost:54321";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "dummy_key";
-process.env.GEMINI_API_KEY = "dummy_key";
+process.env.GROQ_API_KEY = "dummy_key";
 import { test, mock } from "node:test";
 import assert from "node:assert";
 import { supabase } from "../config/supabase.js";
 import { SearchService } from "./search.service.js";
 import { ContextBuilderService } from "./context-builder.service.js";
 
-// Mock the global fetch to intercept Google GenAI embedding API calls
-const originalFetch = globalThis.fetch;
-globalThis.fetch = async (url: any, options: any) => {
-  const urlStr = typeof url === "string" ? url : (url?.url || String(url));
-  if (urlStr.includes("generativelanguage.googleapis.com")) {
-    return {
-      ok: true,
-      status: 200,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ({
-        embeddings: [
-          {
-            values: Array(1536).fill(0.1)
-          }
-        ]
-      })
-    } as any;
+import { setEmbeddingImplementation, resetEmbeddingImplementation } from "../groq/embed.js";
+
+// Stub the embedding implementation directly for consistent and fast mock vectors
+setEmbeddingImplementation(async (text) => {
+  if (text === "error-trigger") {
+    throw new Error("Internal DB Error");
   }
-  return originalFetch(url, options);
-};
+  return Array(1536).fill(0.1);
+});
 
 test("ContextBuilderService - buildContext removes duplicates", () => {
   const chunks = [

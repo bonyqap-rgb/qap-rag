@@ -81,6 +81,6 @@ export class CircuitBreaker {
   }
 }
 
-// Instantiate specific circuit breakers for Gemini (Embeddings and Chat)
-export const geminiCircuitBreaker = new CircuitBreaker("GeminiEmbedding");
-export const chatCircuitBreaker = new CircuitBreaker("GeminiChat");
+// Instantiate specific circuit breakers for Groq (Embeddings and Chat)
+export const groqEmbeddingCircuitBreaker = new CircuitBreaker("GroqEmbedding");
+export const groqChatCircuitBreaker = new CircuitBreaker("GroqChat");

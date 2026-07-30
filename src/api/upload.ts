@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
 import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
-import { createEmbedding } from "../gemini/embed.js";
+import { createEmbedding } from "../groq/embed.js";
 import { saveKnowledge } from "../services/saveKnowledge.js";
 import { logger } from "../services/logger.service.js";
 import { indexingHistoryService } from "../services/indexing-history.service.js";
