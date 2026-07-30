@@ -12,7 +12,7 @@ import { indexingHistoryService } from "../services/indexing-history.service.js"
 import { metricsService } from "../services/metrics.service.js";
 import { errorHandler } from "../middlewares/error.middleware.js";
 
-import { setEmbeddingImplementation, resetEmbeddingImplementation } from "../gemini/embed.js";
+import { setEmbeddingImplementation, resetEmbeddingImplementation } from "../groq/embed.js";
 
 // Stub the embedding implementation directly for consistent and fast mock vectors
 setEmbeddingImplementation(async (text) => {

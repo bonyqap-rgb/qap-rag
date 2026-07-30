@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 import Groq from "groq-sdk";
 import { env } from "../config/env.js";
 import { embeddingCache, generateHashKey } from "../services/cache.service.js";
-import { geminiCircuitBreaker } from "../services/circuit-breaker.service.js";
+import { groqEmbeddingCircuitBreaker } from "../services/circuit-breaker.service.js";
 
 dotenv.config();
 
@@ -84,7 +84,7 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
     );
 
   // Execute the API call inside the Circuit Breaker with exponential backoff retry on transient issues
-  const response = await geminiCircuitBreaker.execute(() =>
+  const response = await groqEmbeddingCircuitBreaker.execute(() =>
     retryWithBackoff(apiCall, env.LLM_RETRIES, env.LLM_RETRY_DELAY)
   );
 
@@ -121,7 +121,7 @@ export function resetEmbeddingImplementation() {
 
 /**
  * Generates an embedding vector for a given piece of text using Groq's nomic-embed-text-v1_5 model.
- * Since the database/pgvector is set to 1536 dimensions (originally from gemini-embedding-001),
+ * Since the database/pgvector is set to 1536 dimensions,
  * we pad the 768-dimensional Nomic embedding with 768 trailing zeros to reach 1536 dimensions.
  * This guarantees perfect database compatibility without altering tables, schemas, or existing data.
  *

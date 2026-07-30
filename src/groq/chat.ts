@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import Groq from "groq-sdk";
 import { env } from "../config/env.js";
-import { chatCircuitBreaker } from "../services/circuit-breaker.service.js";
+import { groqChatCircuitBreaker } from "../services/circuit-breaker.service.js";
 
 dotenv.config();
 
@@ -89,7 +89,10 @@ PERGUNTA:
 ${question}`;
 
   let model = options.model && !options.model.includes("openai") && !options.model.includes("openrouter") ? options.model : env.DEFAULT_CHAT_MODEL;
-  if (model.includes("gemini")) {
+
+  // Generic fallback if model is not the default one or on allowed list
+  const allowedModels = [env.DEFAULT_CHAT_MODEL, "llama3-8b-8192", "llama3-70b-8192", "mixtral-8x7b-32768", "gemma2-9b-it"];
+  if (!allowedModels.includes(model)) {
     console.warn(`[MODEL FALLBACK] Modelo '${model}' não é suportado no momento. Utilizando '${env.DEFAULT_CHAT_MODEL}' em seu lugar.`);
     model = env.DEFAULT_CHAT_MODEL;
   }
@@ -110,7 +113,7 @@ ${question}`;
       timeoutLimit
     );
 
-  const response = await chatCircuitBreaker.execute(() =>
+  const response = await groqChatCircuitBreaker.execute(() =>
     retryWithBackoff(apiCall, retryCount, env.LLM_RETRY_DELAY)
   );
 

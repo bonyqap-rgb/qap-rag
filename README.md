@@ -46,7 +46,7 @@ O fluxo de processamento, resiliência, rate limiting e recuperação semântica
 - **Segurança de Chaves**: Utiliza um algoritmo de Hashing SHA-256 no texto normalizado para garantir consistência e evitar vazamento de dados nos identificadores de cache.
 
 ### 2. Resiliência e Tolerância a Falhas (`src/services/circuit-breaker.service.ts`)
-- **Circuit Breaker Dedicado**: Implementa o padrão de disjuntor para chamadas ao Google Gemini. Transiciona entre os estados `CLOSED`, `OPEN` e `HALF_OPEN`. Em caso de falhas consecutivas, rejeita chamadas imediatamente (Fast-Fail) para proteger recursos.
+- **Circuit Breaker Dedicado**: Implementa o padrão de disjuntor para chamadas ao Groq. Transiciona entre os estados `CLOSED`, `OPEN` e `HALF_OPEN`. Em caso de falhas consecutivas, rejeita chamadas imediatamente (Fast-Fail) para proteger recursos.
 - **Retry com Backoff Exponencial**: Lógica inteligente de retentativas para erros transitórios com atrasos configuráveis.
 
 ### 3. Rate Limiting por IP (`src/middlewares/rate-limit.middleware.ts`)
@@ -76,7 +76,7 @@ O fluxo de processamento, resiliência, rate limiting e recuperação semântica
 
 ## 💬 Fluxo Principal de Chat e Integração com LLM (RAG Chat Flow)
 
-O fluxo principal do QAP IA orquestra a busca semântica, a montagem do contexto limitando seu tamanho máximo e a interação resiliente com o Google Gemini.
+O fluxo principal do QAP IA orquestra a busca semântica, a montagem do contexto limitando seu tamanho máximo e a interação resiliente com o Groq.
 
 ### 📋 Sequência Completa do RAG
 
@@ -99,7 +99,7 @@ O fluxo principal do QAP IA orquestra a busca semântica, a montagem do contexto
        [ Construtor de Prompt ] (System prompt + User prompt estruturados)
                  │
                  ▼
- [ Gemini API Call ] (Circuit Breaker + Retry + Timeout)
+ [ Groq API Call ] (Circuit Breaker + Retry + Timeout)
                  │
                  ▼
     [ Resposta Estruturada + Logs JSON ] (Retorna resposta, fontes reais utilizadas e tempos de processamento)

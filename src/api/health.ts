@@ -33,7 +33,6 @@ router.get("/health", async (_, res) => {
     status: isOk ? "ok" : "error",
     version: "1.0",
     database: databaseStatus,
-    gemini: groqStatus, // backward compatibility
     groq: groqStatus,
   });
 });
@@ -48,14 +47,12 @@ router.get("/ready", async (_, res) => {
     database: { status: "ok" | "error"; message?: string };
     pgvector: { status: "ok" | "error"; message?: string };
     config: { status: "ok" | "error"; message?: string };
-    google_api: { status: "ok" | "error"; message?: string }; // backward compatibility
     groq_api: { status: "ok" | "error"; message?: string };
   } = {
     status: "ok",
     database: { status: "ok" },
     pgvector: { status: "ok" },
     config: { status: "ok" },
-    google_api: { status: "ok" },
     groq_api: { status: "ok" },
   };
 
@@ -80,7 +77,6 @@ router.get("/ready", async (_, res) => {
       message: "GROQ_API_KEY ausente ou configurado com chave dummy",
     };
     readinessDetails.groq_api = errorDetails;
-    readinessDetails.google_api = errorDetails;
     if (env.NODE_ENV === "production") {
       readinessDetails.status = "error";
     }
