@@ -1,6 +1,6 @@
 process.env.SUPABASE_URL = "http://localhost:54321";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "dummy_key";
-process.env.GEMINI_API_KEY = "dummy_key";
+process.env.GROQ_API_KEY = "dummy_key";
 import { test } from "node:test";
 import assert from "node:assert";
 import { ChatService } from "./chat.service.js";
@@ -187,7 +187,7 @@ test("ChatService.chat - input validation empty question", async () => {
   );
 });
 
-test("ChatService.chat - gemini-2.5-flash model sanitization and fallback", async () => {
+test("ChatService.chat - gemini-2.5-flash model sanitization and fallback to default Groq model", async () => {
   const originalSearch = SearchService.search;
   SearchService.search = async () => [
     {
@@ -225,7 +225,7 @@ test("ChatService.chat - gemini-2.5-flash model sanitization and fallback", asyn
     });
 
     assert.strictEqual(res.answer, "Resposta mockada.");
-    assert.strictEqual(capturedModel, "gemini-2.0-flash");
+    assert.strictEqual(capturedModel, "llama-3.3-70b-versatile");
   } finally {
     SearchService.search = originalSearch;
     supabase.from = originalFrom;

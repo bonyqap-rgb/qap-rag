@@ -7,15 +7,15 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc",
-    "test": "SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_ROLE_KEY=dummy_key GEMINI_API_KEY=dummy_key node --import tsx --test src/**/*.test.ts"
+    "test": "SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_ROLE_KEY=dummy_key GROQ_API_KEY=dummy_key node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
-    "@google/genai": "^2.13.0",
     "@supabase/supabase-js": "^2.110.8",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.1",
+    "groq-sdk": "^0.15.0",
     "helmet": "^8.3.0",
     "multer": "^2.2.0",
     "pdfjs-dist": "^6.1.200"

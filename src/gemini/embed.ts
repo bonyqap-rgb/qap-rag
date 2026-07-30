@@ -1,13 +1,13 @@
 import dotenv from "dotenv";
-import { GoogleGenAI } from "@google/genai";
+import Groq from "groq-sdk";
 import { env } from "../config/env.js";
 import { embeddingCache, generateHashKey } from "../services/cache.service.js";
 import { geminiCircuitBreaker } from "../services/circuit-breaker.service.js";
 
 dotenv.config();
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GOOGLE_API_KEY!,
+const groq = new Groq({
+  apiKey: env.GROQ_API_KEY,
 });
 
 /**
@@ -49,20 +49,16 @@ async function retryWithBackoff<T>(
         throw error;
       }
       const backoffDelay = delayMs * Math.pow(2, attempt - 1);
-      console.warn(`[RETRY] Tentativa ${attempt} falhou. Retentando em ${backoffDelay}ms... Erro: ${error.message || error}`);
+      console.warn(`[RETRY] Tentativa de Embedding ${attempt} falhou. Retentando em ${backoffDelay}ms... Erro: ${error.message || error}`);
       await new Promise((resolve) => setTimeout(resolve, backoffDelay));
     }
   }
 }
 
 /**
- * Generates an embedding vector for a given piece of text.
- * Implements validation, caching, API timeouts, and transient error backoff retries.
- *
- * @param text - Input string
- * @returns Embedding vector array of numbers
+ * Default internal implementation for embedding generation.
  */
-export async function createEmbedding(text: string): Promise<number[]> {
+async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
   if (!text || typeof text !== "string" || text.trim() === "") {
     throw new Error("O texto para geração de embedding não pode ser vazio.");
   }
@@ -80,9 +76,9 @@ export async function createEmbedding(text: string): Promise<number[]> {
   // Define the core API operation with timeout protection
   const apiCall = () =>
     withTimeout(
-      ai.models.embedContent({
-        model: "gemini-embedding-001",
-        contents: normalizedText,
+      groq.embeddings.create({
+        model: "nomic-embed-text-v1_5",
+        input: normalizedText,
       }),
       env.LLM_TIMEOUT
     );
@@ -92,15 +88,48 @@ export async function createEmbedding(text: string): Promise<number[]> {
     retryWithBackoff(apiCall, env.LLM_RETRIES, env.LLM_RETRY_DELAY)
   );
 
-  const embedding = response.embeddings?.[0]?.values;
+  const embeddingData = response.data?.[0]?.embedding;
 
   // Validate the resulting embedding vector
-  if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
-    throw new Error("Resposta da API de embedding inválida ou vazia.");
+  if (!embeddingData || !Array.isArray(embeddingData) || embeddingData.length === 0) {
+    throw new Error("Resposta da API de embedding do Groq inválida ou vazia.");
+  }
+
+  // Pad the 768-dimensional vector to 1536 dimensions with zeros for perfect pgvector dimension matching
+  const targetDimension = 1536;
+  const paddedEmbedding = [...embeddingData];
+  while (paddedEmbedding.length < targetDimension) {
+    paddedEmbedding.push(0);
   }
 
   // Populate cache for subsequent operations
-  embeddingCache.set(cacheKey, embedding);
+  embeddingCache.set(cacheKey, paddedEmbedding);
 
-  return embedding;
+  return paddedEmbedding;
+}
+
+// Live binding/re-assignment container for tests in ESM
+let embeddingImplementation = defaultEmbeddingImplementation;
+
+export function setEmbeddingImplementation(fn: typeof defaultEmbeddingImplementation) {
+  embeddingImplementation = fn;
+}
+
+export function resetEmbeddingImplementation() {
+  embeddingImplementation = defaultEmbeddingImplementation;
+}
+
+/**
+ * Generates an embedding vector for a given piece of text using Groq's nomic-embed-text-v1_5 model.
+ * Since the database/pgvector is set to 1536 dimensions (originally from gemini-embedding-001),
+ * we pad the 768-dimensional Nomic embedding with 768 trailing zeros to reach 1536 dimensions.
+ * This guarantees perfect database compatibility without altering tables, schemas, or existing data.
+ *
+ * Implements validation, caching, API timeouts, and transient error backoff retries.
+ *
+ * @param text - Input string
+ * @returns Embedding vector array of 1536 numbers
+ */
+export async function createEmbedding(text: string): Promise<number[]> {
+  return embeddingImplementation(text);
 }

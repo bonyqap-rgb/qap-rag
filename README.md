@@ -153,8 +153,8 @@ Orquestração completa do fluxo RAG de produção com limite de requisições a
 O sistema suporta as seguintes variáveis de ambiente essenciais para o fluxo RAG:
 - `SUPABASE_URL`: URL da API do Supabase.
 - `SUPABASE_SERVICE_ROLE_KEY`: Chave de acesso administrativo do Supabase.
-- `GEMINI_API_KEY`: API Key oficial do Google Gemini para embeddings e chat completion (aceita GOOGLE_API_KEY de forma intercambiável).
-- `GEMINI_CHAT_MODEL`: Modelo do Google Gemini a ser utilizado para as interações de chat (padrão `gemini-2.0-flash`).
+- `GROQ_API_KEY`: API Key oficial do Groq para embeddings (nomic-embed-text-v1_5) e chat completions (llama-3.3-70b-versatile).
+- `GROQ_CHAT_MODEL`: Modelo do Groq a ser utilizado para as interações de chat (padrão `llama-3.3-70b-versatile`).
 - `PORT`: Porta de escuta do servidor Express (padrão `3001`).
 - `DEFAULT_TOP_K`: Quantidade padrão de chunks recuperados por padrão (padrão `5`).
 - `DEFAULT_MIN_SCORE`: Score de similaridade mínimo exigido nas buscas (padrão `0.3`).
@@ -205,7 +205,7 @@ docker build -t qap-rag-backend .
 docker run -p 3001:3001 \
   -e SUPABASE_URL="seu-supabase-url" \
   -e SUPABASE_SERVICE_ROLE_KEY="seu-service-role-key" \
-  -e GEMINI_API_KEY="sua-gemini-key" \
+  -e GROQ_API_KEY="sua-groq-key" \
   qap-rag-backend
 ```
 

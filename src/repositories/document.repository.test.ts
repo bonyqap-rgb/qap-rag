@@ -1,6 +1,6 @@
 process.env.SUPABASE_URL = "http://localhost:54321";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "dummy_key";
-process.env.GEMINI_API_KEY = "dummy_key";
+process.env.GROQ_API_KEY = "dummy_key";
 import { test } from "node:test";
 import assert from "node:assert";
 import { DocumentRepository } from "./document.repository.js";
