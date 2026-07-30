@@ -36,8 +36,7 @@ Ao criar um novo serviço no Render, utilize as seguintes configurações na se�
 | `PORT` | Não | A porta na qual o servidor Express escutará. Injetada dinamicamente pelo Render. | `3001` (padrão) |
 | `SUPABASE_URL` | **Sim** | URL de conexão da API do seu projeto Supabase. | `https://xxxxxx.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Sim** | Chave de acesso administrativo (Service Role Key) do Supabase para transações e operações de vetor. | `eyJhbGciOiJIUzI1NiIsInR5cCI6...` |
-| `GEMINI_API_KEY` | **Sim** | Chave da API do Google Gemini para geração de embeddings e processamento semântico. *(Nota: O backend também aceita `GOOGLE_API_KEY` de forma intercambiável).* | `AIzaSy...` |
-| `OPENROUTER_API_KEY` | **Sim** | Chave da API do OpenRouter para orquestração das respostas de chat (LLM). | `sk-or-v1-...` |
+| `GEMINI_API_KEY` | **Sim** | Chave da API oficial do Google Gemini para geração de embeddings e chat (respostas do LLM). *(Nota: O backend também aceita `GOOGLE_API_KEY` de forma intercambiável).* | `AIzaSy...` |
 | `ALLOWED_ORIGINS` | Não | Lista de origens permitidas pelo CORS separadas por vírgula. Se omitido, aceita por padrão o frontend do Lovable. | `https://qap-ia.lovable.app` |
 
 ---

@@ -81,6 +81,6 @@ export class CircuitBreaker {
   }
 }
 
-// Instantiate specific circuit breakers for Gemini (Embeddings) and OpenRouter (Chat)
+// Instantiate specific circuit breakers for Gemini (Embeddings and Chat)
 export const geminiCircuitBreaker = new CircuitBreaker("GeminiEmbedding");
-export const chatCircuitBreaker = new CircuitBreaker("OpenRouterChat");
+export const chatCircuitBreaker = new CircuitBreaker("GeminiChat");

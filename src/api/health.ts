@@ -23,9 +23,9 @@ router.get("/health", async (_, res) => {
     databaseStatus = "disconnected";
   }
 
-  const isDummy = env.GOOGLE_API_KEY === "dummy_key";
+  const isDummy = env.GEMINI_API_KEY === "dummy_key";
   const isProd = env.NODE_ENV === "production";
-  const geminiStatus = (env.GOOGLE_API_KEY && (!isProd || !isDummy)) ? "connected" : "disconnected";
+  const geminiStatus = (env.GEMINI_API_KEY && (!isProd || !isDummy)) ? "connected" : "disconnected";
 
   const isOk = databaseStatus === "connected" && geminiStatus === "connected";
 
@@ -48,22 +48,19 @@ router.get("/ready", async (_, res) => {
     pgvector: { status: "ok" | "error"; message?: string };
     config: { status: "ok" | "error"; message?: string };
     google_api: { status: "ok" | "error"; message?: string };
-    openrouter_api: { status: "ok" | "error"; message?: string };
   } = {
     status: "ok",
     database: { status: "ok" },
     pgvector: { status: "ok" },
     config: { status: "ok" },
     google_api: { status: "ok" },
-    openrouter_api: { status: "ok" },
   };
 
   // 1. Verify environment configs
   const missingConfigs = [];
   if (!env.SUPABASE_URL) missingConfigs.push("SUPABASE_URL");
   if (!env.SUPABASE_SERVICE_ROLE_KEY) missingConfigs.push("SUPABASE_SERVICE_ROLE_KEY");
-  if (!env.GOOGLE_API_KEY) missingConfigs.push("GOOGLE_API_KEY");
-  if (!env.OPENROUTER_API_KEY) missingConfigs.push("OPENROUTER_API_KEY");
+  if (!env.GEMINI_API_KEY) missingConfigs.push("GEMINI_API_KEY");
 
   if (missingConfigs.length > 0) {
     readinessDetails.status = "error";
@@ -74,21 +71,10 @@ router.get("/ready", async (_, res) => {
   }
 
   // 2. Verify Google GenAI API Key availability
-  if (!env.GOOGLE_API_KEY || env.GOOGLE_API_KEY === "dummy_key") {
+  if (!env.GEMINI_API_KEY || env.GEMINI_API_KEY === "dummy_key") {
     readinessDetails.google_api = {
       status: "error",
-      message: "GOOGLE_API_KEY ausente ou configurado com chave dummy",
-    };
-    if (env.NODE_ENV === "production") {
-      readinessDetails.status = "error";
-    }
-  }
-
-  // 3. Verify OpenRouter API Key availability
-  if (!env.OPENROUTER_API_KEY || env.OPENROUTER_API_KEY === "dummy_key") {
-    readinessDetails.openrouter_api = {
-      status: "error",
-      message: "OPENROUTER_API_KEY ausente ou configurado com chave dummy",
+      message: "GEMINI_API_KEY ausente ou configurado com chave dummy",
     };
     if (env.NODE_ENV === "production") {
       readinessDetails.status = "error";

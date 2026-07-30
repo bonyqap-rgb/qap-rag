@@ -1,13 +1,12 @@
 import dotenv from "dotenv";
-import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
 import { env } from "../config/env.js";
 import { chatCircuitBreaker } from "../services/circuit-breaker.service.js";
 
 dotenv.config();
 
-const client = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY!,
-  baseURL: "https://openrouter.ai/api/v1",
+const ai = new GoogleGenAI({
+  apiKey: env.GEMINI_API_KEY,
 });
 
 /**
@@ -89,38 +88,32 @@ ${context || "Nenhum contexto encontrado."}
 PERGUNTA:
 ${question}`;
 
-  const model = options.model || "openai/gpt-4-mini";
+  const model = options.model && !options.model.includes("openai") && !options.model.includes("openrouter") ? options.model : "gemini-2.5-flash";
   const temperature = options.temperature !== undefined ? options.temperature : 0;
   const timeoutLimit = options.timeout || env.LLM_TIMEOUT;
   const retryCount = options.retries !== undefined ? options.retries : env.LLM_RETRIES;
 
   const apiCall = () =>
     withTimeout(
-      client.chat.completions.create({
+      ai.models.generateContent({
         model,
-        messages: [
-          {
-            role: "system",
-            content: systemPrompt,
-          },
-          {
-            role: "user",
-            content: userPrompt,
-          },
-        ],
-        temperature,
+        contents: userPrompt,
+        config: {
+          systemInstruction: systemPrompt,
+          temperature,
+        },
       }),
       timeoutLimit
     );
 
-  const completion = await chatCircuitBreaker.execute(() =>
+  const response = await chatCircuitBreaker.execute(() =>
     retryWithBackoff(apiCall, retryCount, env.LLM_RETRY_DELAY)
   );
 
-  const answer = completion.choices[0]?.message?.content;
+  const answer = response.text;
 
   if (!answer) {
-    throw new Error("O OpenRouter retornou uma resposta em formato inválido ou vazia.");
+    throw new Error("O Gemini retornou uma resposta vazia.");
   }
 
   return answer.trim();

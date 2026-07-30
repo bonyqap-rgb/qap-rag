@@ -21,10 +21,10 @@ import { chatRateLimiter, searchRateLimiter, indexRateLimiter } from "./middlewa
 logger.info(`[STARTUP] Variáveis de ambiente validadas com sucesso. Ambiente: ${env.NODE_ENV}`);
 
 // 2. Startup Logging - Gemini initialization check
-if (env.GOOGLE_API_KEY) {
+if (env.GEMINI_API_KEY) {
   logger.info("[STARTUP] Gemini SDK inicializado e pronto.");
 } else {
-  logger.warn("[STARTUP] Alerta: GOOGLE_API_KEY não foi configurado.");
+  logger.warn("[STARTUP] Alerta: GEMINI_API_KEY não foi configurado.");
 }
 
 // 3. Startup Logging - Supabase connection check
