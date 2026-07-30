@@ -65,7 +65,10 @@ export class ChatService {
     const maxContextSize = options.maxContextSize !== undefined ? options.maxContextSize : (env.DEFAULT_MAX_CONTEXT_SIZE ?? 4000);
     const temperature = options.temperature !== undefined ? options.temperature : 0;
     const timeout = options.timeout !== undefined ? options.timeout : 25000;
-    const model = options.model !== undefined ? options.model : "openai/gpt-4.1-mini";
+    let model = options.model !== undefined ? options.model : "openai/gpt-4.1-mini";
+    if (model.includes("gemini-2.5")) {
+      model = "gemini-2.0-flash";
+    }
 
     // 2. Perform Semantic Search
     let searchResults = [];
