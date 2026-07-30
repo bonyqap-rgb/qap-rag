@@ -18,7 +18,27 @@ const address = server.address();
 const port = typeof address === "string" ? 0 : address?.port;
 const baseUrl = `http://localhost:${port}`;
 
+// Global Mocking for Supabase Client inside Health tests
+const originalFrom = supabase.from;
+const originalRpc = supabase.rpc;
+
+supabase.from = (table: string) => {
+  assert.strictEqual(table, "knowledge_documents");
+  return {
+    select: () => ({
+      limit: () => Promise.resolve({ data: [{ id: "test-id" }], error: null }),
+    }),
+  } as any;
+};
+
+supabase.rpc = (fn: string) => {
+  assert.strictEqual(fn, "match_documents");
+  return Promise.resolve({ data: [], error: null }) as any;
+};
+
 after(() => {
+  supabase.from = originalFrom;
+  supabase.rpc = originalRpc;
   server.close();
 });
 
@@ -28,40 +48,18 @@ test("GET /health - returns basic status successfully", async () => {
 
   const data = (await res.json()) as any;
   assert.strictEqual(data.status, "ok");
-  assert.ok(data.uptime > 0);
-  assert.ok(typeof data.timestamp === "string");
+  assert.strictEqual(data.version, "1.0");
+  assert.strictEqual(data.database, "connected");
+  assert.strictEqual(data.gemini, "connected");
 });
 
 test("GET /ready - returns deep readiness status details", async () => {
-  // Stub Supabase Select
-  const originalFrom = supabase.from;
-  const originalRpc = supabase.rpc;
+  const res = await fetch(`${baseUrl}/ready`);
+  assert.strictEqual(res.status, 200);
 
-  supabase.from = (table: string) => {
-    assert.strictEqual(table, "knowledge_documents");
-    return {
-      select: () => ({
-        limit: () => Promise.resolve({ data: [{ id: "test-id" }], error: null }),
-      }),
-    } as any;
-  };
-
-  supabase.rpc = (fn: string) => {
-    assert.strictEqual(fn, "match_documents");
-    return Promise.resolve({ data: [], error: null }) as any;
-  };
-
-  try {
-    const res = await fetch(`${baseUrl}/ready`);
-    assert.strictEqual(res.status, 200);
-
-    const data = (await res.json()) as any;
-    assert.strictEqual(data.status, "ok");
-    assert.strictEqual(data.database.status, "ok");
-    assert.strictEqual(data.pgvector.status, "ok");
-    assert.strictEqual(data.config.status, "ok");
-  } finally {
-    supabase.from = originalFrom;
-    supabase.rpc = originalRpc;
-  }
+  const data = (await res.json()) as any;
+  assert.strictEqual(data.status, "ok");
+  assert.strictEqual(data.database.status, "ok");
+  assert.strictEqual(data.pgvector.status, "ok");
+  assert.strictEqual(data.config.status, "ok");
 });
