@@ -46,7 +46,7 @@ O fluxo de processamento, resiliência, rate limiting e recuperação semântica
 - **Segurança de Chaves**: Utiliza um algoritmo de Hashing SHA-256 no texto normalizado para garantir consistência e evitar vazamento de dados nos identificadores de cache.
 
 ### 2. Resiliência e Tolerância a Falhas (`src/services/circuit-breaker.service.ts`)
-- **Circuit Breaker Dedicado**: Implementa o padrão de disjuntor para chamadas ao Gemini e OpenRouter. Transiciona entre os estados `CLOSED`, `OPEN` e `HALF_OPEN`. Em caso de falhas consecutivas, rejeita chamadas imediatamente (Fast-Fail) para proteger recursos.
+- **Circuit Breaker Dedicado**: Implementa o padrão de disjuntor para chamadas ao Google Gemini. Transiciona entre os estados `CLOSED`, `OPEN` e `HALF_OPEN`. Em caso de falhas consecutivas, rejeita chamadas imediatamente (Fast-Fail) para proteger recursos.
 - **Retry com Backoff Exponencial**: Lógica inteligente de retentativas para erros transitórios com atrasos configuráveis.
 
 ### 3. Rate Limiting por IP (`src/middlewares/rate-limit.middleware.ts`)
@@ -76,7 +76,7 @@ O fluxo de processamento, resiliência, rate limiting e recuperação semântica
 
 ## 💬 Fluxo Principal de Chat e Integração com LLM (RAG Chat Flow)
 
-O fluxo principal do QAP IA orquestra a busca semântica, a montagem do contexto limitando seu tamanho máximo e a interação resiliente com o Gemini através do OpenRouter.
+O fluxo principal do QAP IA orquestra a busca semântica, a montagem do contexto limitando seu tamanho máximo e a interação resiliente com o Google Gemini.
 
 ### 📋 Sequência Completa do RAG
 
@@ -99,7 +99,7 @@ O fluxo principal do QAP IA orquestra a busca semântica, a montagem do contexto
        [ Construtor de Prompt ] (System prompt + User prompt estruturados)
                  │
                  ▼
- [ Gemini / OpenRouter API Call ] (Circuit Breaker + Retry + Timeout)
+ [ Gemini API Call ] (Circuit Breaker + Retry + Timeout)
                  │
                  ▼
     [ Resposta Estruturada + Logs JSON ] (Retorna resposta, fontes reais utilizadas e tempos de processamento)
@@ -153,8 +153,7 @@ Orquestração completa do fluxo RAG de produção com limite de requisições a
 O sistema suporta as seguintes variáveis de ambiente essenciais para o fluxo RAG:
 - `SUPABASE_URL`: URL da API do Supabase.
 - `SUPABASE_SERVICE_ROLE_KEY`: Chave de acesso administrativo do Supabase.
-- `GOOGLE_API_KEY`: API Key para embeddings do Google Gemini.
-- `OPENROUTER_API_KEY`: API Key do OpenRouter para chat completion.
+- `GEMINI_API_KEY`: API Key oficial do Google Gemini para embeddings e chat completion (aceita GOOGLE_API_KEY de forma intercambiável).
 - `PORT`: Porta de escuta do servidor Express (padrão `3001`).
 - `DEFAULT_TOP_K`: Quantidade padrão de chunks recuperados por padrão (padrão `5`).
 - `DEFAULT_MIN_SCORE`: Score de similaridade mínimo exigido nas buscas (padrão `0.3`).
@@ -205,8 +204,7 @@ docker build -t qap-rag-backend .
 docker run -p 3001:3001 \
   -e SUPABASE_URL="seu-supabase-url" \
   -e SUPABASE_SERVICE_ROLE_KEY="seu-service-role-key" \
-  -e GOOGLE_API_KEY="sua-google-key" \
-  -e OPENROUTER_API_KEY="sua-openrouter-key" \
+  -e GEMINI_API_KEY="sua-gemini-key" \
   qap-rag-backend
 ```
 

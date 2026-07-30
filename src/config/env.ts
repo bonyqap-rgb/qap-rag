@@ -6,8 +6,7 @@ dotenv.config();
 interface EnvVariables {
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
-  GOOGLE_API_KEY: string;
-  OPENROUTER_API_KEY: string;
+  GEMINI_API_KEY: string;
   NODE_ENV: string;
   PORT: number;
   ALLOWED_ORIGINS: string[];
@@ -36,16 +35,17 @@ interface EnvVariables {
 }
 
 function validateEnv(): EnvVariables {
-  // Normalize GEMINI_API_KEY to GOOGLE_API_KEY if present to allow both key names
-  if (process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY) {
+  // Normalize GOOGLE_API_KEY to GEMINI_API_KEY and vice versa to allow both key names
+  if (process.env.GOOGLE_API_KEY && !process.env.GEMINI_API_KEY) {
+    process.env.GEMINI_API_KEY = process.env.GOOGLE_API_KEY;
+  } else if (process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY) {
     process.env.GOOGLE_API_KEY = process.env.GEMINI_API_KEY;
   }
 
   const required = [
     "SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY",
-    "GOOGLE_API_KEY",
-    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
   ];
 
   const missing: string[] = [];
@@ -65,8 +65,7 @@ function validateEnv(): EnvVariables {
   return {
     SUPABASE_URL: process.env.SUPABASE_URL!,
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    GOOGLE_API_KEY: process.env.GOOGLE_API_KEY!,
-    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY!,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY!,
     NODE_ENV: process.env.NODE_ENV || "development",
     PORT: process.env.PORT ? parseInt(process.env.PORT, 10) : 3001,
     ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS
