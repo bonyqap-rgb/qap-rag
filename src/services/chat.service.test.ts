@@ -186,3 +186,49 @@ test("ChatService.chat - input validation empty question", async () => {
     }
   );
 });
+
+test("ChatService.chat - gemini-2.5-flash model sanitization and fallback", async () => {
+  const originalSearch = SearchService.search;
+  SearchService.search = async () => [
+    {
+      documentId: "doc-uuid-123",
+      chunkIndex: 0,
+      score: 0.8,
+      text: "Algum texto relevante",
+    },
+  ];
+
+  const originalFrom = supabase.from;
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{ id: "doc-uuid-123", file_name: "test.pdf" }],
+            error: null,
+          }),
+        }),
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  let capturedModel: string | undefined;
+  setChatImplementation(async (question, context, options) => {
+    capturedModel = options?.model;
+    return "Resposta mockada.";
+  });
+
+  try {
+    const res = await ChatService.chat("teste de sanitização", {
+      model: "models/gemini-2.5-flash",
+    });
+
+    assert.strictEqual(res.answer, "Resposta mockada.");
+    assert.strictEqual(capturedModel, "gemini-2.0-flash");
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});

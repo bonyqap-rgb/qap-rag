@@ -88,7 +88,11 @@ ${context || "Nenhum contexto encontrado."}
 PERGUNTA:
 ${question}`;
 
-  const model = options.model && !options.model.includes("openai") && !options.model.includes("openrouter") ? options.model : env.DEFAULT_CHAT_MODEL;
+  let model = options.model && !options.model.includes("openai") && !options.model.includes("openrouter") ? options.model : env.DEFAULT_CHAT_MODEL;
+  if (model.includes("gemini-2.5")) {
+    console.warn(`[MODEL FALLBACK] Modelo '${model}' não é suportado no momento. Utilizando 'gemini-2.0-flash' em seu lugar.`);
+    model = "gemini-2.0-flash";
+  }
   const temperature = options.temperature !== undefined ? options.temperature : 0;
   const timeoutLimit = options.timeout || env.LLM_TIMEOUT;
   const retryCount = options.retries !== undefined ? options.retries : env.LLM_RETRIES;

@@ -72,7 +72,10 @@ function validateEnv(): EnvVariables {
     ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS
       ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
       : ["https://qap-ia.lovable.app"],
-    DEFAULT_CHAT_MODEL: process.env.GEMINI_CHAT_MODEL || "gemini-2.0-flash",
+    DEFAULT_CHAT_MODEL: (() => {
+      const rawModel = process.env.GEMINI_CHAT_MODEL || "gemini-2.0-flash";
+      return rawModel.includes("gemini-2.5") ? "gemini-2.0-flash" : rawModel;
+    })(),
     DEFAULT_TOP_K: process.env.DEFAULT_TOP_K ? parseInt(process.env.DEFAULT_TOP_K, 10) : 5,
     DEFAULT_MIN_SCORE: process.env.DEFAULT_MIN_SCORE ? parseFloat(process.env.DEFAULT_MIN_SCORE) : 0.3,
     DEFAULT_MAX_CONTEXT_SIZE: process.env.DEFAULT_MAX_CONTEXT_SIZE ? parseInt(process.env.DEFAULT_MAX_CONTEXT_SIZE, 10) : 4000,
