@@ -73,7 +73,7 @@ VITE_API_URL=https://seu-servico.onrender.com
 ## 🧪 Como Testar e Monitorar
 
 ### Teste de Health Check (Liveness e Readiness)
-Para garantir que todos os serviços externos (Supabase, Gemini e configurações) estejam conectados e operacionais em produção, acesse as URLs de health check em seu navegador ou ferramenta de requisição:
+Para garantir que todos os serviços externos (Supabase, Groq e configurações) estejam conectados e operacionais em produção, acesse as URLs de health check em seu navegador ou ferramenta de requisição:
 
 1. **Liveness Probe**:
    - URL: `https://seu-servico.onrender.com/health`
@@ -83,7 +83,7 @@ Para garantir que todos os serviços externos (Supabase, Gemini e configuraçõe
        "status": "ok",
        "version": "1.0",
        "database": "connected",
-       "gemini": "connected"
+       "groq": "connected"
      }
      ```
 
