@@ -6,7 +6,7 @@ dotenv.config();
 interface EnvVariables {
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
-  GEMINI_API_KEY: string;
+  GROQ_API_KEY: string;
   NODE_ENV: string;
   PORT: number;
   ALLOWED_ORIGINS: string[];
@@ -36,17 +36,10 @@ interface EnvVariables {
 }
 
 function validateEnv(): EnvVariables {
-  // Normalize GOOGLE_API_KEY to GEMINI_API_KEY and vice versa to allow both key names
-  if (process.env.GOOGLE_API_KEY && !process.env.GEMINI_API_KEY) {
-    process.env.GEMINI_API_KEY = process.env.GOOGLE_API_KEY;
-  } else if (process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY) {
-    process.env.GOOGLE_API_KEY = process.env.GEMINI_API_KEY;
-  }
-
   const required = [
     "SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY",
-    "GEMINI_API_KEY",
+    "GROQ_API_KEY",
   ];
 
   const missing: string[] = [];
@@ -66,16 +59,13 @@ function validateEnv(): EnvVariables {
   return {
     SUPABASE_URL: process.env.SUPABASE_URL!,
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    GEMINI_API_KEY: process.env.GEMINI_API_KEY!,
+    GROQ_API_KEY: process.env.GROQ_API_KEY!,
     NODE_ENV: process.env.NODE_ENV || "development",
     PORT: process.env.PORT ? parseInt(process.env.PORT, 10) : 3001,
     ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS
       ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
       : ["https://qap-ia.lovable.app"],
-    DEFAULT_CHAT_MODEL: (() => {
-      const rawModel = process.env.GEMINI_CHAT_MODEL || "gemini-2.0-flash";
-      return rawModel.includes("gemini-2.5") ? "gemini-2.0-flash" : rawModel;
-    })(),
+    DEFAULT_CHAT_MODEL: process.env.GROQ_CHAT_MODEL || "llama-3.3-70b-versatile",
     DEFAULT_TOP_K: process.env.DEFAULT_TOP_K ? parseInt(process.env.DEFAULT_TOP_K, 10) : 5,
     DEFAULT_MIN_SCORE: process.env.DEFAULT_MIN_SCORE ? parseFloat(process.env.DEFAULT_MIN_SCORE) : 0.3,
     DEFAULT_MAX_CONTEXT_SIZE: process.env.DEFAULT_MAX_CONTEXT_SIZE ? parseInt(process.env.DEFAULT_MAX_CONTEXT_SIZE, 10) : 4000,

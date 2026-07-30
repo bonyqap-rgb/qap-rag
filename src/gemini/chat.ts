@@ -1,12 +1,12 @@
 import dotenv from "dotenv";
-import { GoogleGenAI } from "@google/genai";
+import Groq from "groq-sdk";
 import { env } from "../config/env.js";
 import { chatCircuitBreaker } from "../services/circuit-breaker.service.js";
 
 dotenv.config();
 
-const ai = new GoogleGenAI({
-  apiKey: env.GEMINI_API_KEY,
+const groq = new Groq({
+  apiKey: env.GROQ_API_KEY,
 });
 
 /**
@@ -89,9 +89,9 @@ PERGUNTA:
 ${question}`;
 
   let model = options.model && !options.model.includes("openai") && !options.model.includes("openrouter") ? options.model : env.DEFAULT_CHAT_MODEL;
-  if (model.includes("gemini-2.5")) {
-    console.warn(`[MODEL FALLBACK] Modelo '${model}' não é suportado no momento. Utilizando 'gemini-2.0-flash' em seu lugar.`);
-    model = "gemini-2.0-flash";
+  if (model.includes("gemini")) {
+    console.warn(`[MODEL FALLBACK] Modelo '${model}' não é suportado no momento. Utilizando '${env.DEFAULT_CHAT_MODEL}' em seu lugar.`);
+    model = env.DEFAULT_CHAT_MODEL;
   }
   const temperature = options.temperature !== undefined ? options.temperature : 0;
   const timeoutLimit = options.timeout || env.LLM_TIMEOUT;
@@ -99,13 +99,13 @@ ${question}`;
 
   const apiCall = () =>
     withTimeout(
-      ai.models.generateContent({
+      groq.chat.completions.create({
         model,
-        contents: userPrompt,
-        config: {
-          systemInstruction: systemPrompt,
-          temperature,
-        },
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature,
       }),
       timeoutLimit
     );
@@ -114,10 +114,10 @@ ${question}`;
     retryWithBackoff(apiCall, retryCount, env.LLM_RETRY_DELAY)
   );
 
-  const answer = response.text;
+  const answer = response.choices?.[0]?.message?.content;
 
   if (!answer) {
-    throw new Error("O Gemini retornou uma resposta vazia.");
+    throw new Error("O Groq retornou uma resposta vazia.");
   }
 
   return answer.trim();
@@ -135,7 +135,7 @@ export function resetChatImplementation() {
 }
 
 /**
- * Highly configurable chat completion function interfacing with OpenRouter/Gemini.
+ * Highly configurable chat completion function interfacing with Groq.
  */
 export async function chatWithContextConfigurable(
   question: string,
@@ -153,7 +153,7 @@ export async function chatWithContextConfigurable(
 }
 
 /**
- * Interacts with the LLM via OpenRouter to complete a prompt with context.
+ * Interacts with the LLM via Groq to complete a prompt with context.
  * Strictly instructs the model to only use the retrieved context, and reference sources explicitly.
  * Backward compatible wrapper over chatWithContextConfigurable.
  *
