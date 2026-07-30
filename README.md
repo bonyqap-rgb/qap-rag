@@ -154,6 +154,7 @@ O sistema suporta as seguintes variáveis de ambiente essenciais para o fluxo RA
 - `SUPABASE_URL`: URL da API do Supabase.
 - `SUPABASE_SERVICE_ROLE_KEY`: Chave de acesso administrativo do Supabase.
 - `GEMINI_API_KEY`: API Key oficial do Google Gemini para embeddings e chat completion (aceita GOOGLE_API_KEY de forma intercambiável).
+- `GEMINI_CHAT_MODEL`: Modelo do Google Gemini a ser utilizado para as interações de chat (padrão `gemini-2.0-flash`).
 - `PORT`: Porta de escuta do servidor Express (padrão `3001`).
 - `DEFAULT_TOP_K`: Quantidade padrão de chunks recuperados por padrão (padrão `5`).
 - `DEFAULT_MIN_SCORE`: Score de similaridade mínimo exigido nas buscas (padrão `0.3`).
