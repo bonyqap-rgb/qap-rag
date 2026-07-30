@@ -77,7 +77,7 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
   const apiCall = () =>
     withTimeout(
       groq.embeddings.create({
-        model: "nomic-embed-text-v1.5",
+        model: "nomic-embed-text-v1_5",
         input: normalizedText,
       }),
       env.LLM_TIMEOUT
@@ -120,7 +120,7 @@ export function resetEmbeddingImplementation() {
 }
 
 /**
- * Generates an embedding vector for a given piece of text using Groq's nomic-embed-text-v1.5 model.
+ * Generates an embedding vector for a given piece of text using Groq's nomic-embed-text-v1_5 model.
  * Since the database/pgvector is set to 1536 dimensions,
  * we pad the 768-dimensional Nomic embedding with 768 trailing zeros to reach 1536 dimensions.
  * This guarantees perfect database compatibility without altering tables, schemas, or existing data.
