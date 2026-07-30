@@ -10,6 +10,7 @@ interface EnvVariables {
   OPENROUTER_API_KEY: string;
   NODE_ENV: string;
   PORT: number;
+  ALLOWED_ORIGINS: string[];
   DEFAULT_TOP_K: number;
   DEFAULT_MIN_SCORE: number;
   DEFAULT_MAX_CONTEXT_SIZE: number;
@@ -35,6 +36,11 @@ interface EnvVariables {
 }
 
 function validateEnv(): EnvVariables {
+  // Normalize GEMINI_API_KEY to GOOGLE_API_KEY if present to allow both key names
+  if (process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY) {
+    process.env.GOOGLE_API_KEY = process.env.GEMINI_API_KEY;
+  }
+
   const required = [
     "SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY",
@@ -63,6 +69,9 @@ function validateEnv(): EnvVariables {
     OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY!,
     NODE_ENV: process.env.NODE_ENV || "development",
     PORT: process.env.PORT ? parseInt(process.env.PORT, 10) : 3001,
+    ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS
+      ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
+      : ["https://qap-ia.lovable.app"],
     DEFAULT_TOP_K: process.env.DEFAULT_TOP_K ? parseInt(process.env.DEFAULT_TOP_K, 10) : 5,
     DEFAULT_MIN_SCORE: process.env.DEFAULT_MIN_SCORE ? parseFloat(process.env.DEFAULT_MIN_SCORE) : 0.3,
     DEFAULT_MAX_CONTEXT_SIZE: process.env.DEFAULT_MAX_CONTEXT_SIZE ? parseInt(process.env.DEFAULT_MAX_CONTEXT_SIZE, 10) : 4000,

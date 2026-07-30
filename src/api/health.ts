@@ -6,13 +6,34 @@ const router = Router();
 
 /**
  * GET /health
- * Extremely lightweight and fast check to verify the process is alive.
+ * Fast check to verify process is alive and external systems are reachable.
  */
-router.get("/health", (_, res) => {
-  return res.status(200).json({
-    status: "ok",
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
+router.get("/health", async (_, res) => {
+  let databaseStatus = "connected";
+  try {
+    const { error } = await supabase
+      .from("knowledge_documents")
+      .select("id")
+      .limit(1);
+
+    if (error) {
+      databaseStatus = "disconnected";
+    }
+  } catch (err) {
+    databaseStatus = "disconnected";
+  }
+
+  const isDummy = env.GOOGLE_API_KEY === "dummy_key";
+  const isProd = env.NODE_ENV === "production";
+  const geminiStatus = (env.GOOGLE_API_KEY && (!isProd || !isDummy)) ? "connected" : "disconnected";
+
+  const isOk = databaseStatus === "connected" && geminiStatus === "connected";
+
+  return res.status(isOk ? 200 : 503).json({
+    status: isOk ? "ok" : "error",
+    version: "1.0",
+    database: databaseStatus,
+    gemini: geminiStatus,
   });
 });
 

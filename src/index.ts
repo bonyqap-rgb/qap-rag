@@ -39,7 +39,28 @@ const app = express();
 // Set HTTP Security headers using helmet
 app.use(helmet());
 
-app.use(cors());
+// CORS configuration supporting ALLOWED_ORIGINS env variable and default fallback
+const allowedOrigins = env.ALLOWED_ORIGINS;
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl, or server-to-server)
+      if (!origin) return callback(null, true);
+
+      // Check if origin is allowed, or allow all in development / test environments
+      if (
+        allowedOrigins.includes("*") ||
+        allowedOrigins.includes(origin) ||
+        env.NODE_ENV !== "production"
+      ) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Não permitido pelo CORS"), false);
+    },
+    credentials: true,
+  })
+);
 
 // Max payload limit
 app.use(
