@@ -76,23 +76,67 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
   // Define the core API operation with timeout protection
   const apiCall = () =>
     withTimeout(
-      groq.embeddings.create({
-        model: "nomic-embed-text-v1_5",
-        input: normalizedText,
-      }),
+      (async () => {
+        if (env.VOYAGE_API_KEY) {
+          const res = await fetch("https://api.voyageai.com/v1/embeddings", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${env.VOYAGE_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              input: [normalizedText],
+              model: process.env.VOYAGE_EMBED_MODEL || "voyage-3",
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`Erro na API do Voyage AI (${res.status}): ${text}`);
+          }
+          const data = await res.json() as any;
+          const embedding = data.data?.[0]?.embedding;
+          if (!embedding) {
+            throw new Error("Resposta da API de embedding do Voyage AI inválida ou vazia.");
+          }
+          return embedding;
+        } else if (env.NOMIC_API_KEY) {
+          const res = await fetch("https://api-atlas.nomic.ai/v1/embedding/text", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${env.NOMIC_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: process.env.NOMIC_EMBED_MODEL || "nomic-embed-text-v1.5",
+              texts: [normalizedText],
+              task_type: "search_document",
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`Erro na API do Nomic (${res.status}): ${text}`);
+          }
+          const data = await res.json() as any;
+          const embedding = data.embeddings?.[0];
+          if (!embedding) {
+            throw new Error("Resposta da API de embedding do Nomic inválida ou vazia.");
+          }
+          return embedding;
+        } else {
+          throw new Error("Provedor de embedding não configurado. Defina VOYAGE_API_KEY ou NOMIC_API_KEY no arquivo .env.");
+        }
+      })(),
       env.LLM_TIMEOUT
     );
 
   // Execute the API call inside the Circuit Breaker with exponential backoff retry on transient issues
-  const response = await groqEmbeddingCircuitBreaker.execute(() =>
+  const embeddingData = await groqEmbeddingCircuitBreaker.execute(() =>
     retryWithBackoff(apiCall, env.LLM_RETRIES, env.LLM_RETRY_DELAY)
   );
 
-  const embeddingData = response.data?.[0]?.embedding;
-
   // Validate the resulting embedding vector
   if (!embeddingData || !Array.isArray(embeddingData) || embeddingData.length === 0) {
-    throw new Error("Resposta da API de embedding do Groq inválida ou vazia.");
+    throw new Error("Resposta da API de embedding inválida ou vazia.");
   }
 
   // Pad the 768-dimensional vector to 1536 dimensions with zeros for perfect pgvector dimension matching
