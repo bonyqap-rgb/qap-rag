@@ -33,6 +33,10 @@ interface EnvVariables {
   RATE_LIMIT_MAX_CHAT: number; // max requests per window for /chat
   RATE_LIMIT_MAX_SEARCH: number; // max requests per window for /search
   RATE_LIMIT_MAX_INDEX: number; // max requests per window for /documents/index
+
+  // Embeddings provider keys (optional, dynamic fallback)
+  VOYAGE_API_KEY?: string;
+  NOMIC_API_KEY?: string;
 }
 
 function validateEnv(): EnvVariables {
@@ -88,6 +92,10 @@ function validateEnv(): EnvVariables {
     RATE_LIMIT_MAX_CHAT: process.env.RATE_LIMIT_MAX_CHAT ? parseInt(process.env.RATE_LIMIT_MAX_CHAT, 10) : 100,
     RATE_LIMIT_MAX_SEARCH: process.env.RATE_LIMIT_MAX_SEARCH ? parseInt(process.env.RATE_LIMIT_MAX_SEARCH, 10) : 100,
     RATE_LIMIT_MAX_INDEX: process.env.RATE_LIMIT_MAX_INDEX ? parseInt(process.env.RATE_LIMIT_MAX_INDEX, 10) : 20,
+
+    // Embeddings API Keys
+    VOYAGE_API_KEY: process.env.VOYAGE_API_KEY,
+    NOMIC_API_KEY: process.env.NOMIC_API_KEY,
   };
 }
 
