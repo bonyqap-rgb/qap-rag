@@ -38,8 +38,8 @@ test("migrate-vectors script - successfully processes only completed documents",
       fileSize: 100,
       mimeType: "application/pdf",
       totalPages: 1,
-      createdAt: new Date(),
-      updatedAt: new Date()
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     },
     {
       id: "doc-2",
@@ -53,8 +53,8 @@ test("migrate-vectors script - successfully processes only completed documents",
       fileSize: 100,
       mimeType: "application/pdf",
       totalPages: 1,
-      createdAt: new Date(),
-      updatedAt: new Date()
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     },
     {
       id: "doc-3",
@@ -68,8 +68,8 @@ test("migrate-vectors script - successfully processes only completed documents",
       fileSize: 100,
       mimeType: "application/pdf",
       totalPages: 1,
-      createdAt: new Date(),
-      updatedAt: new Date()
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     }
   ];
 
