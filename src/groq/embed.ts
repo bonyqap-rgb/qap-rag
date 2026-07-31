@@ -139,17 +139,22 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
     throw new Error("Resposta da API de embedding inválida ou vazia.");
   }
 
-  // Pad the 768-dimensional vector to 1536 dimensions with zeros for perfect pgvector dimension matching
+  // Adjust the embedding vector to be exactly 1536 dimensions for perfect pgvector compatibility.
+  // Truncate if larger (e.g., 3072 dimensions) or pad with zeros if smaller (e.g., 768 or 1024 dimensions).
   const targetDimension = 1536;
-  const paddedEmbedding = [...embeddingData];
-  while (paddedEmbedding.length < targetDimension) {
-    paddedEmbedding.push(0);
+  let finalEmbedding = [...embeddingData];
+  if (finalEmbedding.length > targetDimension) {
+    finalEmbedding = finalEmbedding.slice(0, targetDimension);
+  } else {
+    while (finalEmbedding.length < targetDimension) {
+      finalEmbedding.push(0);
+    }
   }
 
   // Populate cache for subsequent operations
-  embeddingCache.set(cacheKey, paddedEmbedding);
+  embeddingCache.set(cacheKey, finalEmbedding);
 
-  return paddedEmbedding;
+  return finalEmbedding;
 }
 
 // Live binding/re-assignment container for tests in ESM

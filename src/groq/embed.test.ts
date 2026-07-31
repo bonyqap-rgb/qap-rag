@@ -56,6 +56,53 @@ test("Embedding Service - Voyage AI success and 1536 padding", async () => {
   }
 });
 
+test("Embedding Service - Voyage AI success and 3072 truncation to 1536", async () => {
+  const originalVoyageKey = env.VOYAGE_API_KEY;
+  const originalNomicKey = env.NOMIC_API_KEY;
+  const originalFetch = globalThis.fetch;
+
+  env.VOYAGE_API_KEY = "mock_voyage_key";
+  env.NOMIC_API_KEY = undefined;
+
+  let calledUrl = "";
+  let calledOptions: any = null;
+
+  globalThis.fetch = async (url: any, options: any) => {
+    calledUrl = url.toString();
+    calledOptions = options;
+    return {
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            embedding: Array(3072).fill(0.9),
+            index: 0
+          }
+        ]
+      })
+    } as any;
+  };
+
+  try {
+    resetEmbeddingImplementation();
+    const result = await createEmbedding("test truncation text");
+
+    assert.strictEqual(calledUrl, "https://api.voyageai.com/v1/embeddings");
+    assert.strictEqual(calledOptions?.method, "POST");
+    const body = JSON.parse(calledOptions?.body);
+    assert.deepStrictEqual(body.input, ["test truncation text"]);
+
+    // Check truncation logic (3072 dimensions sliced to exactly 1536)
+    assert.strictEqual(result.length, 1536);
+    assert.strictEqual(result[0], 0.9);
+    assert.strictEqual(result[1535], 0.9);
+  } finally {
+    env.VOYAGE_API_KEY = originalVoyageKey;
+    env.NOMIC_API_KEY = originalNomicKey;
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Embedding Service - Nomic API success and 1536 padding", async () => {
   const originalVoyageKey = env.VOYAGE_API_KEY;
   const originalNomicKey = env.NOMIC_API_KEY;
