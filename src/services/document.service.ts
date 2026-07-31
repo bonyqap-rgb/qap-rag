@@ -340,11 +340,30 @@ export class DocumentService {
       }
 
       // Try RPC transaction update
-      const rpcData = newChunksData.map(c => ({
-        chunk_index: c.chunk_index,
-        content: c.content,
-        embedding: c.embedding
-      }));
+      const rpcData = newChunksData.map(c => {
+        // Enforce 1536-dimensional vectors for perfect pgvector compatibility
+        const targetDimension = 1536;
+        let finalChunkEmbedding = c.embedding ? [...c.embedding] : [];
+        if (finalChunkEmbedding.length !== targetDimension) {
+          console.warn(`[REINDEX] Chunk ${c.chunk_index} com dimensão de embedding incorreta: ${finalChunkEmbedding.length}. Corrigindo...`);
+          if (finalChunkEmbedding.length > targetDimension) {
+            finalChunkEmbedding = finalChunkEmbedding.slice(0, targetDimension);
+          } else {
+            while (finalChunkEmbedding.length < targetDimension) {
+              finalChunkEmbedding.push(0);
+            }
+          }
+        }
+        return {
+          chunk_index: c.chunk_index,
+          content: c.content,
+          embedding: finalChunkEmbedding
+        };
+      });
+
+      if (rpcData.length > 0) {
+        console.log(`[REINDEX] dimensão enviada para a RPC do Supabase (update_document_chunks_transaction): ${rpcData[0].embedding?.length}`);
+      }
 
       const { error: rpcErr } = await supabase.rpc("update_document_chunks_transaction", {
         p_k_doc_id: kDocId,
