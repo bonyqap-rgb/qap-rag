@@ -26,11 +26,26 @@ export async function searchKnowledge(
     throw new Error("Vetor de busca de embedding inválido ou vazio.");
   }
 
+  // Enforce 1536-dimensional vectors and log dimension sent to RPC
+  const targetDimension = 1536;
+  let finalEmbedding = [...embedding];
+  if (finalEmbedding.length !== targetDimension) {
+    console.warn(`[SEARCH KNOWLEDGE] Dimensão do embedding de busca é incorreta: ${finalEmbedding.length}. Forçando ajuste para ${targetDimension}...`);
+    if (finalEmbedding.length > targetDimension) {
+      finalEmbedding = finalEmbedding.slice(0, targetDimension);
+    } else {
+      while (finalEmbedding.length < targetDimension) {
+        finalEmbedding.push(0);
+      }
+    }
+  }
+  console.log(`[SEARCH KNOWLEDGE] dimensão enviada para a RPC do Supabase: ${finalEmbedding.length}`);
+
   // Request a slightly higher match count to compensate for deduplications during post-processing
   const rawLimit = limit * 2;
 
   const { data, error } = await supabase.rpc("match_documents", {
-    query_embedding: embedding,
+    query_embedding: finalEmbedding,
     match_count: rawLimit,
   });
 

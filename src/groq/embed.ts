@@ -69,8 +69,22 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
   // Return cached result if already computed to avoid redundant API queries
   const cached = embeddingCache.get(cacheKey);
   if (cached) {
-    console.log(`[EMBEDDING CACHE] Retornando vetor em cache para: "${normalizedText.substring(0, 30)}..."`);
-    return cached;
+    console.log(`[EMBEDDING CACHE] Retornando vetor em cache para: "${normalizedText.substring(0, 30)}..." - dimensão cached: ${cached.length}`);
+    let finalCached = [...cached];
+    const targetDimension = 1536;
+    if (finalCached.length !== targetDimension) {
+      console.warn(`[EMBEDDING CACHE] Vetor em cache com dimensão incorreta: ${finalCached.length}. Forçando ajuste para ${targetDimension}...`);
+      if (finalCached.length > targetDimension) {
+        finalCached = finalCached.slice(0, targetDimension);
+      } else {
+        while (finalCached.length < targetDimension) {
+          finalCached.push(0);
+        }
+      }
+      embeddingCache.set(cacheKey, finalCached);
+    }
+    console.log(`[EMBEDDING] dimensão após qualquer transformação (do cache): ${finalCached.length}`);
+    return finalCached;
   }
 
   // Define the core API operation with timeout protection
@@ -98,6 +112,7 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
           if (!embedding) {
             throw new Error("Resposta da API de embedding do Voyage AI inválida ou vazia.");
           }
+          console.log(`[VOYAGE AI] dimensão original recebida da API: ${embedding.length}`);
           return embedding;
         } else if (env.NOMIC_API_KEY) {
           const res = await fetch("https://api-atlas.nomic.ai/v1/embedding/text", {
@@ -121,6 +136,7 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
           if (!embedding) {
             throw new Error("Resposta da API de embedding do Nomic inválida ou vazia.");
           }
+          console.log(`[NOMIC] dimensão original recebida da API: ${embedding.length}`);
           return embedding;
         } else {
           throw new Error("Provedor de embedding não configurado. Defina VOYAGE_API_KEY ou NOMIC_API_KEY no arquivo .env.");
@@ -139,6 +155,9 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
     throw new Error("Resposta da API de embedding inválida ou vazia.");
   }
 
+  const originalDimension = embeddingData.length;
+  console.log(`[EMBEDDING] dimensão original recebida da API: ${originalDimension}`);
+
   // Adjust the embedding vector to be exactly 1536 dimensions for perfect pgvector compatibility.
   // Truncate if larger (e.g., 3072 dimensions) or pad with zeros if smaller (e.g., 768 or 1024 dimensions).
   const targetDimension = 1536;
@@ -150,6 +169,8 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
       finalEmbedding.push(0);
     }
   }
+
+  console.log(`[EMBEDDING] dimensão após qualquer transformação: ${finalEmbedding.length}`);
 
   // Populate cache for subsequent operations
   embeddingCache.set(cacheKey, finalEmbedding);

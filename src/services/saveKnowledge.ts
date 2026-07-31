@@ -104,16 +104,33 @@ export async function saveKnowledge(
 
     const enrichedContent = `[METADATA:${metadataHeader}]\n${pc.text}`;
 
+    // Enforce 1536-dimensional vectors for perfect pgvector compatibility
+    const targetDimension = 1536;
+    let finalChunkEmbedding = pc.embedding ? [...pc.embedding] : [];
+    if (finalChunkEmbedding.length !== targetDimension) {
+      console.warn(`[SAVE KNOWLEDGE] Chunk ${index} com dimensão de embedding incorreta: ${finalChunkEmbedding.length}. Corrigindo...`);
+      if (finalChunkEmbedding.length > targetDimension) {
+        finalChunkEmbedding = finalChunkEmbedding.slice(0, targetDimension);
+      } else {
+        while (finalChunkEmbedding.length < targetDimension) {
+          finalChunkEmbedding.push(0);
+        }
+      }
+    }
+
     return {
       document_id: document.id,
       chunk_index: index,
       content: enrichedContent,
-      embedding: pc.embedding,
+      embedding: finalChunkEmbedding,
     };
   });
 
   // 3. Batch insert database rows with retry logic
   const chunkInsertCall = async () => {
+    if (rows.length > 0) {
+      console.log(`[SAVE KNOWLEDGE] dimensão enviada para o Supabase (insert): ${rows[0].embedding?.length}`);
+    }
     const { error } = await supabase
       .from("knowledge_chunks")
       .insert(rows);

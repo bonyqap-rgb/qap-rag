@@ -105,11 +105,26 @@ export class SearchService {
     // 2. Generate embedding for query text (leverages caching and retries internally)
     const embedding = await createEmbedding(queryText);
 
+    // Enforce 1536-dimensional vectors and log dimension sent to RPC
+    const targetDimension = 1536;
+    let finalEmbedding = [...embedding];
+    if (finalEmbedding.length !== targetDimension) {
+      console.warn(`[SEARCH] Dimensão do embedding gerado é incorreta: ${finalEmbedding.length}. Forçando ajuste para ${targetDimension}...`);
+      if (finalEmbedding.length > targetDimension) {
+        finalEmbedding = finalEmbedding.slice(0, targetDimension);
+      } else {
+        while (finalEmbedding.length < targetDimension) {
+          finalEmbedding.push(0);
+        }
+      }
+    }
+    console.log(`[SEARCH] dimensão enviada para a RPC do Supabase: ${finalEmbedding.length}`);
+
     // 3. Query pgvector via match_documents RPC with slightly higher limit to handle post-filtering deduplication
     const rawLimit = Math.max(topK * 2, 20);
 
     let dbQuery = supabase.rpc("match_documents", {
-      query_embedding: embedding,
+      query_embedding: finalEmbedding,
       match_count: rawLimit,
     });
 
