@@ -439,4 +439,59 @@ export class DocumentService {
       throw error;
     }
   }
+
+  /**
+   * Reindexes all documents that are currently in 'completed' status.
+   * Processes one by one, records progress, and returns detailed metrics.
+   */
+  async reindexAllCompletedDocuments(): Promise<{
+    success: boolean;
+    documentsProcessed: number;
+    chunksProcessed: number;
+    durationMs: number;
+    errors: { id: string; filename: string; error: string }[];
+  }> {
+    logger.info("=== INICIANDO REINDEXAÇÃO COMPLETA DE TODOS OS DOCUMENTOS ===");
+    const startTime = performance.now();
+
+    const docs = await this.listDocuments();
+    const completedDocs = docs.filter(doc => doc.processingStatus === "completed");
+
+    logger.info(`[REINDEX ALL] Documentos identificados para reindexação: ${completedDocs.length}`);
+    const errors: { id: string; filename: string; error: string }[] = [];
+    let documentsProcessed = 0;
+    let chunksProcessed = 0;
+
+    for (const doc of completedDocs) {
+      logger.info(`[REINDEX ALL] Iniciando reindexação do documento: "${doc.title}" (ID: ${doc.id}, Arquivo: ${doc.filename})...`);
+      try {
+        const result = await this.reindexDocument(doc.id);
+        if (result.success) {
+          documentsProcessed++;
+          chunksProcessed += result.chunksCount || 0;
+          logger.info(`[REINDEX ALL] Sucesso! Documento "${doc.filename}" reindexado. Chunks: ${result.chunksCount} em ${result.durationMs}ms`);
+        } else {
+          const message = result.message || "Erro desconhecido durante reindexação";
+          logger.error(`[REINDEX ALL] Falha no documento ${doc.filename}: ${message}`);
+          errors.push({ id: doc.id, filename: doc.filename, error: message });
+        }
+      } catch (err: any) {
+        const errMsg = err.message || String(err);
+        logger.error(`[REINDEX ALL] Erro inesperado no documento ${doc.filename}: ${errMsg}`, err);
+        errors.push({ id: doc.id, filename: doc.filename, error: errMsg });
+      }
+    }
+
+    const durationMs = Math.round(performance.now() - startTime);
+    logger.info(`=== REINDEXAÇÃO COMPLETA CONCLUÍDA em ${durationMs}ms ===`);
+    logger.info(`[REINDEX ALL] Sucesso: ${documentsProcessed} de ${completedDocs.length} documentos processados. Total de Chunks: ${chunksProcessed}`);
+
+    return {
+      success: errors.length === 0,
+      documentsProcessed,
+      chunksProcessed,
+      durationMs,
+      errors
+    };
+  }
 }

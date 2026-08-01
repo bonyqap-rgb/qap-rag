@@ -235,3 +235,78 @@ test("API DELETE /documents/:id - deletes document safely", async () => {
     documentService.deleteDocument = originalDelete;
   }
 });
+
+test("API POST /documents/reindex-all - rejects request with 401 if unauthorized", async () => {
+  const res = await fetch(`${docUrl}/reindex-all`, {
+    method: "POST"
+  });
+  assert.strictEqual(res.status, 401);
+  const body = await res.json() as any;
+  assert.strictEqual(body.error, "UNAUTHORIZED");
+});
+
+test("API POST /documents/reindex-all - reindexes all completed documents when authorized", async () => {
+  const originalList = documentService.listDocuments;
+  const originalReindex = documentService.reindexDocument;
+
+  const mockDocs = [
+    {
+      id: "doc-1",
+      title: "Doc 1",
+      category: "Segurança",
+      version: "1.0.0",
+      source: "Manual",
+      language: "pt-BR",
+      filename: "doc1.pdf",
+      fileSize: 100,
+      mimeType: "application/pdf",
+      totalPages: 1,
+      processingStatus: "completed" as const
+    },
+    {
+      id: "doc-2",
+      title: "Doc 2",
+      category: "Segurança",
+      version: "1.0.0",
+      source: "Manual",
+      language: "pt-BR",
+      filename: "doc2.pdf",
+      fileSize: 100,
+      mimeType: "application/pdf",
+      totalPages: 1,
+      processingStatus: "pending" as const
+    }
+  ];
+
+  const reindexedIds: string[] = [];
+
+  documentService.listDocuments = async () => mockDocs as any;
+  documentService.reindexDocument = async (id: string) => {
+    reindexedIds.push(id);
+    return {
+      success: true,
+      chunksCount: 5,
+      durationMs: 120
+    };
+  };
+
+  try {
+    const res = await fetch(`${docUrl}/reindex-all`, {
+      method: "POST",
+      headers: {
+        "x-admin-key": "dummy_key"
+      }
+    });
+
+    assert.strictEqual(res.status, 200);
+    const body = await res.json() as any;
+
+    assert.strictEqual(body.success, true);
+    assert.strictEqual(body.documentsProcessed, 1);
+    assert.strictEqual(body.chunksProcessed, 5);
+    assert.deepStrictEqual(reindexedIds, ["doc-1"]);
+  } finally {
+    documentService.listDocuments = originalList;
+    documentService.reindexDocument = originalReindex;
+  }
+});
