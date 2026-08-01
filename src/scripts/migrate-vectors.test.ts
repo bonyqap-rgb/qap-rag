@@ -23,6 +23,7 @@ test("migrate-vectors script - successfully processes only completed documents",
   env.VOYAGE_API_KEY = "mock-voyage-key";
 
   const originalList = DocumentService.prototype.listDocuments;
+  const originalListK = DocumentService.prototype.listKnowledgeDocuments;
   const originalReindex = DocumentService.prototype.reindexDocument;
 
   const mockDocs = [
@@ -76,6 +77,7 @@ test("migrate-vectors script - successfully processes only completed documents",
   const reindexedIds: string[] = [];
 
   DocumentService.prototype.listDocuments = async () => mockDocs;
+  DocumentService.prototype.listKnowledgeDocuments = async () => mockDocs.filter(d => d.processingStatus === "completed").map(d => ({ id: d.id, file_name: d.filename }));
   DocumentService.prototype.reindexDocument = async (id: string) => {
     reindexedIds.push(id);
     return {
@@ -94,6 +96,7 @@ test("migrate-vectors script - successfully processes only completed documents",
   } finally {
     env.VOYAGE_API_KEY = originalVoyageKey;
     DocumentService.prototype.listDocuments = originalList;
+    DocumentService.prototype.listKnowledgeDocuments = originalListK;
     DocumentService.prototype.reindexDocument = originalReindex;
   }
 });

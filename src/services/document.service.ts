@@ -129,6 +129,21 @@ export class DocumentService {
   }
 
   /**
+   * Retrieves all knowledge documents directly from knowledge_documents table
+   */
+  async listKnowledgeDocuments(): Promise<{ id: string; file_name: string }[]> {
+    const { data, error } = await supabase
+      .from("knowledge_documents")
+      .select("id, file_name")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+    return data || [];
+  }
+
+  /**
    * Retrieves a single document by ID or throws NotFoundError
    */
   async getDocumentById(id: string): Promise<Document> {
@@ -282,20 +297,36 @@ export class DocumentService {
       throw new ValidationError("O ID do documento não foi informado.");
     }
 
-    const doc = await this.getDocumentById(id);
+    // Try finding the knowledge document directly by ID or filename
+    let kDoc = null;
+    let kDocError = null;
 
-    // Find corresponding knowledge document
-    const { data: kDoc, error: kDocError } = await supabase
-      .from("knowledge_documents")
-      .select("id")
-      .eq("file_name", doc.filename)
-      .maybeSingle();
+    if (id.includes("-")) {
+      const res = await supabase
+        .from("knowledge_documents")
+        .select("id, file_name")
+        .eq("id", id)
+        .maybeSingle();
+      kDoc = res.data;
+      kDocError = res.error;
+    }
+
+    if (!kDoc) {
+      const res = await supabase
+        .from("knowledge_documents")
+        .select("id, file_name")
+        .eq("file_name", id)
+        .maybeSingle();
+      kDoc = res.data;
+      kDocError = res.error;
+    }
 
     if (kDocError || !kDoc) {
-      throw new NotFoundError(`Documento de conhecimento correspondente a '${doc.filename}' não encontrado.`);
+      throw new NotFoundError(`Documento de conhecimento correspondente a '${id}' não encontrado.`);
     }
 
     const kDocId = kDoc.id;
+    const filename = kDoc.file_name;
 
     // Fetch existing chunks
     const { data: chunks, error: chunksError } = await supabase
@@ -312,8 +343,12 @@ export class DocumentService {
       throw new ValidationError("Não há trechos de texto na base para reindexar.");
     }
 
-    // Set status to processing
-    await this.updateDocument(id, { processingStatus: "processing" });
+    // Set status to processing (safe try-catch if documents table is missing)
+    try {
+      await this.updateDocument(id, { processingStatus: "processing" });
+    } catch (err) {
+      logger.warn(`Falha ao atualizar status para processing na tabela 'documents': ${err}`);
+    }
 
     const startTime = performance.now();
     const timestamp = new Date().toISOString();
@@ -395,8 +430,12 @@ export class DocumentService {
         if (insErr) throw insErr;
       }
 
-      // Update processing status and timestamp
-      await this.updateDocument(id, { processingStatus: "completed" });
+      // Update processing status and timestamp (safe try-catch if documents table is missing)
+      try {
+        await this.updateDocument(id, { processingStatus: "completed" });
+      } catch (err) {
+        logger.warn(`Falha ao atualizar status para completed na tabela 'documents': ${err}`);
+      }
 
       await supabase
         .from("knowledge_documents")
@@ -407,7 +446,7 @@ export class DocumentService {
 
       // Record history
       await indexingHistoryService.record({
-        document: doc.filename,
+        document: filename,
         date: timestamp,
         duration,
         chunks_count: chunks.length,
@@ -424,10 +463,14 @@ export class DocumentService {
 
     } catch (error: any) {
       const duration = Math.round(performance.now() - startTime);
-      await this.updateDocument(id, { processingStatus: "failed" });
+      try {
+        await this.updateDocument(id, { processingStatus: "failed" });
+      } catch (err) {
+        logger.warn(`Falha ao atualizar status para failed na tabela 'documents': ${err}`);
+      }
 
       await indexingHistoryService.record({
-        document: doc.filename,
+        document: filename,
         date: new Date().toISOString(),
         duration,
         chunks_count: chunks?.length || 0,
@@ -454,37 +497,38 @@ export class DocumentService {
     logger.info("=== INICIANDO REINDEXAÇÃO COMPLETA DE TODOS OS DOCUMENTOS ===");
     const startTime = performance.now();
 
-    const docs = await this.listDocuments();
-    const completedDocs = docs.filter(doc => doc.processingStatus === "completed");
+    // Fetch documents directly from knowledge_documents table
+    const completedDocs = await this.listKnowledgeDocuments();
 
-    logger.info(`[REINDEX ALL] Documentos identificados para reindexação: ${completedDocs.length}`);
+    logger.info(`[REINDEX ALL] Documentos identificados para reindexação: ${completedDocs?.length || 0}`);
     const errors: { id: string; filename: string; error: string }[] = [];
     let documentsProcessed = 0;
     let chunksProcessed = 0;
 
-    for (const doc of completedDocs) {
-      logger.info(`[REINDEX ALL] Iniciando reindexação do documento: "${doc.title}" (ID: ${doc.id}, Arquivo: ${doc.filename})...`);
+    for (const doc of (completedDocs || [])) {
+      const filename = doc.file_name;
+      logger.info(`[REINDEX ALL] Iniciando reindexação do documento: ID: ${doc.id}, Arquivo: ${filename}...`);
       try {
         const result = await this.reindexDocument(doc.id);
         if (result.success) {
           documentsProcessed++;
           chunksProcessed += result.chunksCount || 0;
-          logger.info(`[REINDEX ALL] Sucesso! Documento "${doc.filename}" reindexado. Chunks: ${result.chunksCount} em ${result.durationMs}ms`);
+          logger.info(`[REINDEX ALL] Sucesso! Documento "${filename}" reindexado. Chunks: ${result.chunksCount} em ${result.durationMs}ms`);
         } else {
           const message = result.message || "Erro desconhecido durante reindexação";
-          logger.error(`[REINDEX ALL] Falha no documento ${doc.filename}: ${message}`);
-          errors.push({ id: doc.id, filename: doc.filename, error: message });
+          logger.error(`[REINDEX ALL] Falha no documento ${filename}: ${message}`);
+          errors.push({ id: doc.id, filename, error: message });
         }
       } catch (err: any) {
         const errMsg = err.message || String(err);
-        logger.error(`[REINDEX ALL] Erro inesperado no documento ${doc.filename}: ${errMsg}`, err);
-        errors.push({ id: doc.id, filename: doc.filename, error: errMsg });
+        logger.error(`[REINDEX ALL] Erro inesperado no documento ${filename}: ${errMsg}`, err);
+        errors.push({ id: doc.id, filename, error: errMsg });
       }
     }
 
     const durationMs = Math.round(performance.now() - startTime);
     logger.info(`=== REINDEXAÇÃO COMPLETA CONCLUÍDA em ${durationMs}ms ===`);
-    logger.info(`[REINDEX ALL] Sucesso: ${documentsProcessed} de ${completedDocs.length} documentos processados. Total de Chunks: ${chunksProcessed}`);
+    logger.info(`[REINDEX ALL] Sucesso: ${documentsProcessed} de ${completedDocs?.length || 0} documentos processados. Total de Chunks: ${chunksProcessed}`);
 
     return {
       success: errors.length === 0,

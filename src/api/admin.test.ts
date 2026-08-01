@@ -278,6 +278,7 @@ test("API POST /documents/reindex-all - rejects request with 401 if unauthorized
 
 test("API POST /documents/reindex-all - reindexes all completed documents when authorized", async () => {
   const originalList = documentService.listDocuments;
+  const originalListK = documentService.listKnowledgeDocuments;
   const originalReindex = documentService.reindexDocument;
 
   const mockDocs = [
@@ -312,6 +313,7 @@ test("API POST /documents/reindex-all - reindexes all completed documents when a
   const reindexedIds: string[] = [];
 
   documentService.listDocuments = async () => mockDocs as any;
+  documentService.listKnowledgeDocuments = async () => mockDocs.filter(d => d.processingStatus === "completed").map(d => ({ id: d.id, file_name: d.filename }));
   documentService.reindexDocument = async (id: string) => {
     reindexedIds.push(id);
     return {
@@ -338,6 +340,7 @@ test("API POST /documents/reindex-all - reindexes all completed documents when a
     assert.deepStrictEqual(reindexedIds, ["doc-1"]);
   } finally {
     documentService.listDocuments = originalList;
+    documentService.listKnowledgeDocuments = originalListK;
     documentService.reindexDocument = originalReindex;
   }
 });
@@ -358,6 +361,7 @@ test("API POST /admin/reindex-all - rejects unauthorized access", async () => {
 
 test("API POST /admin/reindex-all - executes reindexing successfully when authorized", async () => {
   const originalList = documentService.listDocuments;
+  const originalListK = documentService.listKnowledgeDocuments;
   const originalReindex = documentService.reindexDocument;
 
   const mockDocs = [
@@ -379,6 +383,7 @@ test("API POST /admin/reindex-all - executes reindexing successfully when author
   const reindexedIds: string[] = [];
 
   documentService.listDocuments = async () => mockDocs as any;
+  documentService.listKnowledgeDocuments = async () => mockDocs.map(d => ({ id: d.id, file_name: d.filename }));
   documentService.reindexDocument = async (id: string) => {
     reindexedIds.push(id);
     return {
@@ -405,6 +410,7 @@ test("API POST /admin/reindex-all - executes reindexing successfully when author
     assert.deepStrictEqual(reindexedIds, ["doc-admin-1"]);
   } finally {
     documentService.listDocuments = originalList;
+    documentService.listKnowledgeDocuments = originalListK;
     documentService.reindexDocument = originalReindex;
   }
 });
