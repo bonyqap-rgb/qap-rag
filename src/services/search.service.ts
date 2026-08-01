@@ -97,6 +97,7 @@ export class SearchService {
     const seenTexts = new Set<string>();
 
     for (const item of results) {
+      if (!item) continue;
       const score = item.similarity ?? 0;
 
       // Skip if below similarity threshold
@@ -105,10 +106,10 @@ export class SearchService {
       }
 
       // Extract clean text and parse embedded metadata block
-      let cleanText = item.content || "";
+      let cleanText = item.content ?? "";
       const metaMatch = cleanText.match(/^\[METADATA:[\s\S]*?\]\n([\s\S]*)$/);
       if (metaMatch) {
-        cleanText = metaMatch[1];
+        cleanText = metaMatch[1] ?? "";
       }
 
       cleanText = cleanText.trim();

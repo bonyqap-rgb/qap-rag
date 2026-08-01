@@ -60,16 +60,17 @@ export async function searchKnowledge(
 
   // Filter, Deduplicate and rank results
   for (const item of results) {
+    if (!item) continue;
     // Skip if below the similarity threshold
-    if (item.similarity < similarityThreshold) {
+    if ((item.similarity ?? 0) < similarityThreshold) {
       continue;
     }
 
     // Extract raw text (ignoring metadata prefix if any) for pure textual deduplication
-    let cleanText = item.content;
-    const metaMatch = item.content.match(/^\[METADATA:[\s\S]*?\]\n([\s\S]*)$/);
+    let cleanText = item.content ?? "";
+    const metaMatch = cleanText.match(/^\[METADATA:[\s\S]*?\]\n([\s\S]*)$/);
     if (metaMatch) {
-      cleanText = metaMatch[1];
+      cleanText = metaMatch[1] ?? "";
     }
 
     const key = (cleanText ?? "").trim().toLowerCase();

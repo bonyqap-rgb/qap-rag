@@ -46,7 +46,7 @@ export async function saveKnowledge(
   const timestamp = new Date().toISOString();
 
   for (let i = 0; i < rawChunks.length; i++) {
-    const rawChunk = rawChunks[i];
+    const rawChunk = rawChunks[i] ?? "";
     let pageNum = 1;
     let cleanText = rawChunk;
 
@@ -54,12 +54,12 @@ export async function saveKnowledge(
     const pageMatch = rawChunk.match(/^\[PAGE:(\d+)\]\s*([\s\S]*)$/);
     if (pageMatch) {
       pageNum = parseInt(pageMatch[1], 10);
-      cleanText = pageMatch[2].trim();
+      cleanText = (pageMatch[2] ?? "").trim();
     }
 
     // Skip duplicates - check if this clean text is already added in this document upload
     const isDuplicate = processedChunks.some(
-      (pc) => (pc.text ?? "").toLowerCase() === (cleanText ?? "").toLowerCase()
+      (pc) => (pc?.text ?? "").toLowerCase() === (cleanText ?? "").toLowerCase()
     );
 
     if (isDuplicate) {
