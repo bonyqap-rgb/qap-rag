@@ -40,6 +40,27 @@ export interface ChatResponse {
 
 export class ChatService {
   /**
+   * Resolves the list of document IDs that are in scope for the chat interaction.
+   * If a specific documentId is supplied, it is returned; otherwise, retrieves all documents.
+   */
+  static async resolveDocuments(filters?: { documentId?: string }): Promise<string[]> {
+    if (filters?.documentId) {
+      return [filters.documentId];
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("knowledge_documents")
+        .select("id");
+      if (error) throw error;
+      return (data || []).map((doc) => doc.id);
+    } catch (err) {
+      logger.error("Erro ao resolver documentos na base de dados", err);
+      return [];
+    }
+  }
+
+  /**
    * Orchestrates the complete RAG flow:
    * Pergunta -> Geração de embedding -> Busca semântica -> Recuperar contexto -> Montar prompt -> Groq -> Resposta estruturada
    *
@@ -72,16 +93,39 @@ export class ChatService {
       model = env.DEFAULT_CHAT_MODEL;
     }
 
-    // 2. Perform Semantic Search
-    let searchResults = [];
+    // 2. Resolve document IDs and perform semantic search for all of them
+    const resolvedDocIds = await ChatService.resolveDocuments(options.filters);
+    let searchResults: any[] = [];
     const searchStartTime = performance.now();
+
     try {
-      searchResults = await SearchService.search(
-        question,
-        topK,
-        scoreThreshold,
-        options.filters
-      );
+      if (resolvedDocIds.length > 0) {
+        // Query search results for each document and combine them
+        const searchPromises = resolvedDocIds.map((docId) =>
+          SearchService.search(question, topK, scoreThreshold, { ...options.filters, documentId })
+        );
+        const resultsArray = await Promise.all(searchPromises);
+
+        const seenKeys = new Set<string>();
+        for (const resList of resultsArray) {
+          for (const item of resList) {
+            const key = `${item.documentId}-${item.chunkIndex}`;
+            if (!seenKeys.has(key)) {
+              seenKeys.add(key);
+              searchResults.push(item);
+            }
+          }
+        }
+        // Sort merged results by similarity score descending
+        searchResults.sort((a, b) => b.score - a.score);
+      } else {
+        searchResults = await SearchService.search(
+          question,
+          topK,
+          scoreThreshold,
+          options.filters
+        );
+      }
     } catch (error: any) {
       logger.error("Erro na busca vetorial do banco vetorial", error);
       const err = new Error(`Erro na busca vetorial da base de dados: ${error.message}`);
