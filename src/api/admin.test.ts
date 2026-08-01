@@ -248,6 +248,7 @@ test("API POST /documents/reindex-all - rejects request with 401 if unauthorized
 test("API POST /documents/reindex-all - reindexes all completed documents when authorized", async () => {
   const originalList = documentService.listDocuments;
   const originalReindex = documentService.reindexDocument;
+  const originalFrom = supabase.from;
 
   const mockDocs = [
     {
@@ -290,6 +291,18 @@ test("API POST /documents/reindex-all - reindexes all completed documents when a
     };
   };
 
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: (fields: string) => Promise.resolve({
+          data: [{ id: "doc-1", file_name: "doc1.pdf" }],
+          error: null
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
   try {
     const res = await fetch(`${docUrl}/reindex-all`, {
       method: "POST",
@@ -308,5 +321,6 @@ test("API POST /documents/reindex-all - reindexes all completed documents when a
   } finally {
     documentService.listDocuments = originalList;
     documentService.reindexDocument = originalReindex;
+    supabase.from = originalFrom;
   }
 });

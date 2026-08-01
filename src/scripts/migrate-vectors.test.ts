@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { env } from "../config/env.js";
+import { supabase } from "../config/supabase.js";
 import { DocumentService } from "../services/document.service.js";
 import { runMigration } from "./migrate-vectors.js";
 
@@ -24,6 +25,7 @@ test("migrate-vectors script - successfully processes only completed documents",
 
   const originalList = DocumentService.prototype.listDocuments;
   const originalReindex = DocumentService.prototype.reindexDocument;
+  const originalFrom = supabase.from;
 
   const mockDocs = [
     {
@@ -86,6 +88,21 @@ test("migrate-vectors script - successfully processes only completed documents",
     };
   };
 
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: (fields: string) => Promise.resolve({
+          data: [
+            { id: "doc-1", file_name: "doc1.pdf" },
+            { id: "doc-3", file_name: "doc3.pdf" }
+          ],
+          error: null
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
   try {
     const result = await runMigration();
     assert.strictEqual(result.success, true);
@@ -95,5 +112,6 @@ test("migrate-vectors script - successfully processes only completed documents",
     env.VOYAGE_API_KEY = originalVoyageKey;
     DocumentService.prototype.listDocuments = originalList;
     DocumentService.prototype.reindexDocument = originalReindex;
+    supabase.from = originalFrom;
   }
 });
