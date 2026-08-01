@@ -282,20 +282,62 @@ export class DocumentService {
       throw new ValidationError("O ID do documento não foi informado.");
     }
 
-    const doc = await this.getDocumentById(id);
+    let kDocId: string | null = null;
+    let filename = "";
 
-    // Find corresponding knowledge document
-    const { data: kDoc, error: kDocError } = await supabase
-      .from("knowledge_documents")
-      .select("id")
-      .eq("file_name", doc.filename)
-      .maybeSingle();
+    // Try to find corresponding knowledge document directly from knowledge_documents table
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    if (isUuid) {
+      const { data: kDoc, error: kDocError } = await supabase
+        .from("knowledge_documents")
+        .select("id, file_name")
+        .eq("id", id)
+        .maybeSingle();
 
-    if (kDocError || !kDoc) {
-      throw new NotFoundError(`Documento de conhecimento correspondente a '${doc.filename}' não encontrado.`);
+      if (!kDocError && kDoc) {
+        kDocId = kDoc.id;
+        filename = kDoc.file_name;
+      }
     }
 
-    const kDocId = kDoc.id;
+    if (!kDocId) {
+      // Try to find by file_name in knowledge_documents
+      const { data: kDoc, error: kDocError } = await supabase
+        .from("knowledge_documents")
+        .select("id, file_name")
+        .eq("file_name", id)
+        .maybeSingle();
+
+      if (!kDocError && kDoc) {
+        kDocId = kDoc.id;
+        filename = kDoc.file_name;
+      }
+    }
+
+    // Fallback: If not found, try documents table (legacy)
+    if (!kDocId) {
+      try {
+        const doc = await this.getDocumentById(id);
+        filename = doc.filename;
+
+        const { data: kDoc, error: kDocError } = await supabase
+          .from("knowledge_documents")
+          .select("id, file_name")
+          .eq("file_name", doc.filename)
+          .maybeSingle();
+
+        if (!kDocError && kDoc) {
+          kDocId = kDoc.id;
+          filename = kDoc.file_name;
+        }
+      } catch (err) {
+        // Safe to ignore / let it proceed to handle missing table scenario
+      }
+    }
+
+    if (!kDocId) {
+      throw new NotFoundError(`Documento de conhecimento correspondente a '${id}' não encontrado.`);
+    }
 
     // Fetch existing chunks
     const { data: chunks, error: chunksError } = await supabase
@@ -312,8 +354,20 @@ export class DocumentService {
       throw new ValidationError("Não há trechos de texto na base para reindexar.");
     }
 
-    // Set status to processing
-    await this.updateDocument(id, { processingStatus: "processing" });
+    // Set status to processing (optional/safely wrapped)
+    try {
+      // Find corresponding ID in documents table
+      const { data: docInDb } = await supabase
+        .from("documents")
+        .select("id")
+        .eq("filename", filename)
+        .maybeSingle();
+      if (docInDb) {
+        await this.updateDocument(docInDb.id, { processingStatus: "processing" });
+      }
+    } catch (err) {
+      // Ignore if table doesn't exist
+    }
 
     const startTime = performance.now();
     const timestamp = new Date().toISOString();
@@ -395,8 +449,19 @@ export class DocumentService {
         if (insErr) throw insErr;
       }
 
-      // Update processing status and timestamp
-      await this.updateDocument(id, { processingStatus: "completed" });
+      // Update processing status and timestamp (optional/safely wrapped)
+      try {
+        const { data: docInDb } = await supabase
+          .from("documents")
+          .select("id")
+          .eq("filename", filename)
+          .maybeSingle();
+        if (docInDb) {
+          await this.updateDocument(docInDb.id, { processingStatus: "completed" });
+        }
+      } catch (err) {
+        // Ignore if table doesn't exist
+      }
 
       await supabase
         .from("knowledge_documents")
@@ -407,7 +472,7 @@ export class DocumentService {
 
       // Record history
       await indexingHistoryService.record({
-        document: doc.filename,
+        document: filename,
         date: timestamp,
         duration,
         chunks_count: chunks.length,
@@ -424,10 +489,23 @@ export class DocumentService {
 
     } catch (error: any) {
       const duration = Math.round(performance.now() - startTime);
-      await this.updateDocument(id, { processingStatus: "failed" });
+
+      // Update processing status and timestamp (optional/safely wrapped)
+      try {
+        const { data: docInDb } = await supabase
+          .from("documents")
+          .select("id")
+          .eq("filename", filename)
+          .maybeSingle();
+        if (docInDb) {
+          await this.updateDocument(docInDb.id, { processingStatus: "failed" });
+        }
+      } catch (err) {
+        // Ignore if table doesn't exist
+      }
 
       await indexingHistoryService.record({
-        document: doc.filename,
+        document: filename,
         date: new Date().toISOString(),
         duration,
         chunks_count: chunks?.length || 0,
@@ -454,8 +532,27 @@ export class DocumentService {
     logger.info("=== INICIANDO REINDEXAÇÃO COMPLETA DE TODOS OS DOCUMENTOS ===");
     const startTime = performance.now();
 
-    const docs = await this.listDocuments();
-    const completedDocs = docs.filter(doc => doc.processingStatus === "completed");
+    let completedDocs: { id: string; file_name: string }[] = [];
+    try {
+      const { data: kDocs, error: kDocsErr } = await supabase
+        .from("knowledge_documents")
+        .select("id, file_name");
+
+      if (kDocsErr) {
+        throw kDocsErr;
+      }
+      completedDocs = (kDocs || []).map(d => ({ id: d.id, file_name: d.file_name }));
+    } catch (dbError: any) {
+      logger.warn(`[REINDEX ALL] Falha ao buscar de knowledge_documents diretamente: ${dbError.message || dbError}. Tentando fallback via listDocuments...`);
+      try {
+        const docs = await this.listDocuments();
+        completedDocs = docs
+          .filter(doc => doc.processingStatus === "completed")
+          .map(doc => ({ id: doc.id, file_name: doc.filename }));
+      } catch (fallbackError: any) {
+        throw dbError; // throw the original error if fallback also fails
+      }
+    }
 
     logger.info(`[REINDEX ALL] Documentos identificados para reindexação: ${completedDocs.length}`);
     const errors: { id: string; filename: string; error: string }[] = [];
@@ -463,22 +560,22 @@ export class DocumentService {
     let chunksProcessed = 0;
 
     for (const doc of completedDocs) {
-      logger.info(`[REINDEX ALL] Iniciando reindexação do documento: "${doc.title}" (ID: ${doc.id}, Arquivo: ${doc.filename})...`);
+      logger.info(`[REINDEX ALL] Iniciando reindexação do documento: (ID: ${doc.id}, Arquivo: ${doc.file_name})...`);
       try {
         const result = await this.reindexDocument(doc.id);
         if (result.success) {
           documentsProcessed++;
           chunksProcessed += result.chunksCount || 0;
-          logger.info(`[REINDEX ALL] Sucesso! Documento "${doc.filename}" reindexado. Chunks: ${result.chunksCount} em ${result.durationMs}ms`);
+          logger.info(`[REINDEX ALL] Sucesso! Documento "${doc.file_name}" reindexado. Chunks: ${result.chunksCount} em ${result.durationMs}ms`);
         } else {
           const message = result.message || "Erro desconhecido durante reindexação";
-          logger.error(`[REINDEX ALL] Falha no documento ${doc.filename}: ${message}`);
-          errors.push({ id: doc.id, filename: doc.filename, error: message });
+          logger.error(`[REINDEX ALL] Falha no documento ${doc.file_name}: ${message}`);
+          errors.push({ id: doc.id, filename: doc.file_name, error: message });
         }
       } catch (err: any) {
         const errMsg = err.message || String(err);
-        logger.error(`[REINDEX ALL] Erro inesperado no documento ${doc.filename}: ${errMsg}`, err);
-        errors.push({ id: doc.id, filename: doc.filename, error: errMsg });
+        logger.error(`[REINDEX ALL] Erro inesperado no documento ${doc.file_name}: ${errMsg}`, err);
+        errors.push({ id: doc.id, filename: doc.file_name, error: errMsg });
       }
     }
 
