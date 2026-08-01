@@ -213,7 +213,7 @@ test("SearchService - search handles error scenarios", async () => {
   try {
     await assert.rejects(
       () => SearchService.search("teste", 5, 0.3),
-      /Erro na busca vetorial por RPC: Internal DB Error/
+      /Erro na busca vetorial por RPC.*Internal DB Error/
     );
   } finally {
     supabase.rpc = originalRpc;

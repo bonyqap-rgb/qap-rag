@@ -40,6 +40,78 @@ export interface ChatResponse {
 
 export class ChatService {
   /**
+   * Resolves document scope based on keywords inside the question or filters.
+   * If the question contains "RDPM" (case-insensitive), it queries `knowledge_documents`
+   * and maps it to the document whose filename contains "rdpm" (case-insensitive).
+   *
+   * @param question - The user's question.
+   * @param filters - Optional pre-existing filters.
+   * @returns Resolved document information or null.
+   */
+  static async resolveDocuments(
+    question: string,
+    filters?: { documentId?: string; [key: string]: any }
+  ): Promise<{ documentId: string; filename: string } | null> {
+    // 1. If a documentId is already present in filters, try to fetch its details to confirm/resolve
+    if (filters?.documentId) {
+      try {
+        const { data: doc, error } = await supabase
+          .from("knowledge_documents")
+          .select("id, file_name")
+          .eq("id", filters.documentId)
+          .maybeSingle();
+
+        if (!error && doc) {
+          return { documentId: doc.id, filename: doc.file_name };
+        }
+      } catch (err) {
+        logger.error("Erro ao validar documentId existente em resolveDocuments", err);
+      }
+    }
+
+    const lowerQuestion = question.toLowerCase();
+
+    // 2. Specific check for RDPM keyword
+    if (lowerQuestion.includes("rdpm")) {
+      try {
+        const { data: docs, error } = await supabase
+          .from("knowledge_documents")
+          .select("id, file_name");
+
+        if (!error && docs) {
+          const matched = docs.find((d) => d.file_name.toLowerCase().includes("rdpm"));
+          if (matched) {
+            return { documentId: matched.id, filename: matched.file_name };
+          }
+        }
+      } catch (err) {
+        logger.error("Erro ao carregar documentos para resolver 'RDPM'", err);
+      }
+    }
+
+    // 3. Generic check for any other document filename mentioned in the question
+    try {
+      const { data: docs, error } = await supabase
+        .from("knowledge_documents")
+        .select("id, file_name");
+
+      if (!error && docs) {
+        for (const doc of docs) {
+          // Remove extension to match the core name
+          const cleanName = doc.file_name.toLowerCase().replace(/\.[^/.]+$/, "");
+          if (cleanName && lowerQuestion.includes(cleanName)) {
+            return { documentId: doc.id, filename: doc.file_name };
+          }
+        }
+      }
+    } catch (err) {
+      logger.error("Erro na busca de documentos para resolução genérica", err);
+    }
+
+    return null;
+  }
+
+  /**
    * Orchestrates the complete RAG flow:
    * Pergunta -> Geração de embedding -> Busca semântica -> Recuperar contexto -> Montar prompt -> Groq -> Resposta estruturada
    *
@@ -72,6 +144,20 @@ export class ChatService {
       model = env.DEFAULT_CHAT_MODEL;
     }
 
+    // A. Resolve document scope from the question or filters
+    const resolvedDoc = await ChatService.resolveDocuments(question, options.filters);
+    const activeFilters = { ...options.filters };
+
+    if (resolvedDoc) {
+      activeFilters.documentId = resolvedDoc.documentId;
+    }
+
+    // Log the resolved document details as requested
+    logger.info("Documento resolvido para busca", {
+      "documento resolvido": resolvedDoc ? resolvedDoc.filename : null,
+      "document_id": resolvedDoc ? resolvedDoc.documentId : null
+    });
+
     // 2. Perform Semantic Search
     let searchResults = [];
     const searchStartTime = performance.now();
@@ -80,7 +166,7 @@ export class ChatService {
         question,
         topK,
         scoreThreshold,
-        options.filters
+        activeFilters
       );
     } catch (error: any) {
       logger.error("Erro na busca vetorial do banco vetorial", error);
@@ -90,9 +176,26 @@ export class ChatService {
     }
     const searchTimeMs = performance.now() - searchStartTime;
 
-    // 3. Handle Empty Context Scenario
-    if (searchResults.length === 0) {
+    const resultsCount = searchResults.length;
+
+    // Log resultsCount as requested
+    logger.info("Contagem de resultados da busca semântica", {
+      resultsCount
+    });
+
+    // 3. Handle Empty/Insufficient Context Scenario (First Check: resultsCount === 0)
+    if (resultsCount === 0) {
       const overallDuration = performance.now() - overallStartTime;
+      const motivoInsuficiencia = "Nenhum trecho retornado da busca semântica (resultsCount === 0)";
+
+      // Log motivo exato da insuficiência quando ocorrer
+      logger.info("Insuficiência de contexto detectada", {
+        "documento resolvido": resolvedDoc ? resolvedDoc.filename : null,
+        "document_id": resolvedDoc ? resolvedDoc.documentId : null,
+        resultsCount,
+        "motivo exato da insuficiência": motivoInsuficiencia
+      });
+
       logger.info("Fluxo de Chat concluído com contexto vazio", {
         searchTimeMs: parseFloat(searchTimeMs.toFixed(2)),
         generationTimeMs: 0,
@@ -181,6 +284,38 @@ export class ChatService {
           break;
         }
       }
+    }
+
+    // Second Check: No valid chunk retrieved/utilized
+    if (finalUsedChunks.length === 0) {
+      const overallDuration = performance.now() - overallStartTime;
+      const motivoInsuficiencia = "Nenhum chunk válido foi recuperado após filtragem/processamento de contexto (finalUsedChunks.length === 0)";
+
+      // Log motivo exato da insuficiência quando ocorrer
+      logger.info("Insuficiência de contexto detectada", {
+        "documento resolvido": resolvedDoc ? resolvedDoc.filename : null,
+        "document_id": resolvedDoc ? resolvedDoc.documentId : null,
+        resultsCount,
+        "motivo exato da insuficiência": motivoInsuficiencia
+      });
+
+      logger.info("Fluxo de Chat concluído com contexto vazio", {
+        searchTimeMs: parseFloat(searchTimeMs.toFixed(2)),
+        generationTimeMs: 0,
+        totalTimeMs: parseFloat(overallDuration.toFixed(2)),
+        documentsCount: 0,
+        chunksCount: 0,
+      });
+
+      return {
+        answer: "Não encontrei essa informação na base de conhecimento.",
+        sources: [],
+        metadata: {
+          searchTime: `${searchTimeMs.toFixed(0)}ms`,
+          generationTime: "0ms",
+          totalTime: `${overallDuration.toFixed(0)}ms`,
+        },
+      };
     }
 
     // 6. Build Context and Prompts
