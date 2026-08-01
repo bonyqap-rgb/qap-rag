@@ -1,35 +1,35 @@
 export type DocumentProcessingStatus = "pending" | "processing" | "completed" | "failed";
 
 export interface Document {
-  id: string;
-  title: string;
-  category: string;
-  version: string;
-  source: string;
-  language: string;
-  filename: string;
-  fileSize: number;
-  mimeType: string;
-  totalPages: number;
-  processingStatus: DocumentProcessingStatus;
-  createdAt: string;
-  updatedAt: string;
+  id?: string;
+  title?: string;
+  category?: string;
+  version?: string;
+  source?: string;
+  language?: string;
+  filename?: string;
+  fileSize?: number;
+  mimeType?: string;
+  totalPages?: number;
+  processingStatus?: DocumentProcessingStatus;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface DbDocument {
-  id: string;
-  title: string;
-  category: string;
-  version: string;
-  source: string;
-  language: string;
-  filename: string;
-  file_size: number;
-  mime_type: string;
-  total_pages: number;
-  processing_status: DocumentProcessingStatus;
-  created_at: string;
-  updated_at: string;
+  id?: string;
+  title?: string;
+  category?: string;
+  version?: string;
+  source?: string;
+  language?: string;
+  filename?: string;
+  file_size?: number;
+  mime_type?: string;
+  total_pages?: number;
+  processing_status?: DocumentProcessingStatus;
+  created_at?: string;
+  updated_at?: string;
 }
 
 /**
@@ -37,19 +37,19 @@ export interface DbDocument {
  */
 export function mapDbToDocument(dbDoc: DbDocument): Document {
   return {
-    id: dbDoc.id,
-    title: dbDoc.title,
-    category: dbDoc.category,
-    version: dbDoc.version,
-    source: dbDoc.source,
-    language: dbDoc.language,
-    filename: dbDoc.filename,
-    fileSize: dbDoc.file_size,
-    mimeType: dbDoc.mime_type,
-    totalPages: dbDoc.total_pages,
-    processingStatus: dbDoc.processing_status,
-    createdAt: dbDoc.created_at,
-    updatedAt: dbDoc.updated_at,
+    id: dbDoc?.id ?? "",
+    title: dbDoc?.title ?? "",
+    category: dbDoc?.category ?? "",
+    version: dbDoc?.version ?? "",
+    source: dbDoc?.source ?? "",
+    language: dbDoc?.language ?? "",
+    filename: dbDoc?.filename ?? "",
+    fileSize: dbDoc?.file_size ?? 0,
+    mimeType: dbDoc?.mime_type ?? "",
+    totalPages: dbDoc?.total_pages ?? 0,
+    processingStatus: dbDoc?.processing_status ?? "pending",
+    createdAt: dbDoc?.created_at ?? "",
+    updatedAt: dbDoc?.updated_at ?? "",
   };
 }
 

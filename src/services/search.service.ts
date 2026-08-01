@@ -112,7 +112,7 @@ export class SearchService {
       }
 
       cleanText = cleanText.trim();
-      const textKey = cleanText.toLowerCase();
+      const textKey = (cleanText ?? "").toLowerCase();
 
       // Deduplicate
       if (!seenTexts.has(textKey)) {

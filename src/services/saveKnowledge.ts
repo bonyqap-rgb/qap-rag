@@ -59,7 +59,7 @@ export async function saveKnowledge(
 
     // Skip duplicates - check if this clean text is already added in this document upload
     const isDuplicate = processedChunks.some(
-      (pc) => pc.text.toLowerCase() === cleanText.toLowerCase()
+      (pc) => (pc.text ?? "").toLowerCase() === (cleanText ?? "").toLowerCase()
     );
 
     if (isDuplicate) {

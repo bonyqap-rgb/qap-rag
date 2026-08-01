@@ -31,7 +31,7 @@ export class ContextBuilderService {
     const seenTexts = new Set<string>();
 
     for (const chunk of chunks) {
-      const normalizedText = chunk.text.trim().toLowerCase();
+      const normalizedText = (chunk?.text ?? "").trim().toLowerCase();
       if (!seenTexts.has(normalizedText)) {
         seenTexts.add(normalizedText);
         uniqueChunks.push(chunk);

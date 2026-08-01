@@ -23,19 +23,19 @@ export class DocumentRepository {
     }
 
     return (data || []).map((row: any) => ({
-      id: row.id,
-      title: row.file_name,
+      id: row.id ?? "",
+      title: row.file_name ?? "",
       category: "Geral",
       version: "1.0",
       source: "Upload",
       language: "pt-BR",
-      filename: row.file_name,
+      filename: row.file_name ?? "",
       fileSize: 1024,
       mimeType: "application/pdf",
       totalPages: 1,
       processingStatus: "completed",
-      createdAt: row.created_at,
-      updatedAt: row.updated_at || row.created_at,
+      createdAt: row.created_at ?? "",
+      updatedAt: row.updated_at || row.created_at || "",
     }));
   }
 
@@ -58,19 +58,19 @@ export class DocumentRepository {
     }
 
     return {
-      id: data.id,
-      title: data.file_name,
+      id: data.id ?? "",
+      title: data.file_name ?? "",
       category: "Geral",
       version: "1.0",
       source: "Upload",
       language: "pt-BR",
-      filename: data.file_name,
+      filename: data.file_name ?? "",
       fileSize: 1024,
       mimeType: "application/pdf",
       totalPages: 1,
       processingStatus: "completed",
-      createdAt: data.created_at,
-      updatedAt: data.updated_at || data.created_at,
+      createdAt: data.created_at ?? "",
+      updatedAt: data.updated_at || data.created_at || "",
     };
   }
 
@@ -92,19 +92,19 @@ export class DocumentRepository {
     }
 
     return {
-      id: data.id,
-      title: data.file_name,
+      id: data.id ?? "",
+      title: data.file_name ?? "",
       category: "Geral",
       version: "1.0",
       source: "Upload",
       language: "pt-BR",
-      filename: data.file_name,
+      filename: data.file_name ?? "",
       fileSize: 1024,
       mimeType: "application/pdf",
       totalPages: 1,
       processingStatus: "completed",
-      createdAt: data.created_at,
-      updatedAt: data.updated_at || data.created_at,
+      createdAt: data.created_at ?? "",
+      updatedAt: data.updated_at || data.created_at || "",
     };
   }
 
@@ -134,19 +134,19 @@ export class DocumentRepository {
     }
 
     return {
-      id: data.id,
-      title: data.file_name,
+      id: data.id ?? "",
+      title: data.file_name ?? "",
       category: "Geral",
       version: "1.0",
       source: "Upload",
       language: "pt-BR",
-      filename: data.file_name,
+      filename: data.file_name ?? "",
       fileSize: 1024,
       mimeType: "application/pdf",
       totalPages: 1,
       processingStatus: "completed",
-      createdAt: data.created_at,
-      updatedAt: data.updated_at || data.created_at,
+      createdAt: data.created_at ?? "",
+      updatedAt: data.updated_at || data.created_at || "",
     };
   }
 

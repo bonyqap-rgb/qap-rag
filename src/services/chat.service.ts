@@ -141,7 +141,7 @@ export class ChatService {
     const seenTexts = new Set<string>();
     const uniqueChunks = [];
     for (const r of searchResults) {
-      const norm = r.text.trim().toLowerCase();
+      const norm = (r?.text ?? "").trim().toLowerCase();
       if (!seenTexts.has(norm)) {
         seenTexts.add(norm);
         uniqueChunks.push(r);

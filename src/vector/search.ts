@@ -72,7 +72,7 @@ export async function searchKnowledge(
       cleanText = metaMatch[1];
     }
 
-    const key = cleanText.trim().toLowerCase();
+    const key = (cleanText ?? "").trim().toLowerCase();
     if (!textKeys.has(key)) {
       textKeys.add(key);
       uniqueResults.push(item);
