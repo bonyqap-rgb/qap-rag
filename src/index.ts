@@ -12,6 +12,7 @@ import documentsRouter from "./api/documents.js";
 import searchRouter from "./api/search.js";
 import healthRouter from "./api/health.js";
 import metricsRouter from "./api/metrics.js";
+import adminRouter from "./api/admin.js";
 
 // Middlewares
 import { requestLogger } from "./middlewares/request-logger.middleware.js";
@@ -51,6 +52,7 @@ app.use(
       if (
         allowedOrigins.includes("*") ||
         allowedOrigins.includes(origin) ||
+        origin === "https://hoppscotch.io" ||
         env.NODE_ENV !== "production"
       ) {
         return callback(null, true);
@@ -59,6 +61,8 @@ app.use(
       return callback(new Error("Não permitido pelo CORS"), false);
     },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-admin-key", "x-request-id"],
   })
 );
 
@@ -134,6 +138,9 @@ app.post("/teste", (req, res) => {
 
 // Health router endpoints (contains /health and /ready)
 app.use("/", healthRouter);
+
+// Admin dashboard route
+app.use("/admin", adminRouter);
 
 // Apply Rate Limiters to specific endpoints
 app.use("/upload", indexRateLimiter, uploadRouter);
