@@ -104,26 +104,35 @@ router.get("/ready", async (_, res) => {
     };
   }
 
-  // 5. Verify pgvector (RPC match_documents with a zero embedding vector)
+  // 5. Verify pgvector (RPC match_documents with fallback to match_knowledge_chunks)
   try {
     const dummyEmbedding = new Array(1536).fill(0); // Standard length or just empty array
-    const { error: rpcError } = await supabase.rpc("match_documents", {
+    let { error: rpcError } = await supabase.rpc("match_documents", {
       query_embedding: dummyEmbedding,
       match_count: 1,
     });
+
+    if (rpcError) {
+      console.warn(`[HEALTH] RPC 'match_documents' falhou ou não existe. Tentando fallback para 'match_knowledge_chunks'...`);
+      const { error: fallbackError } = await supabase.rpc("match_knowledge_chunks", {
+        query_embedding: dummyEmbedding,
+        match_count: 1,
+      });
+      rpcError = fallbackError;
+    }
 
     if (rpcError) {
       if (rpcError.message.includes("does not exist")) {
         readinessDetails.status = "error";
         readinessDetails.pgvector = {
           status: "error",
-          message: `Função match_documents RPC não existe no banco de dados.`,
+          message: `Nenhuma das funções RPC de busca (match_documents ou match_knowledge_chunks) existe no banco de dados.`,
         };
       } else {
         readinessDetails.status = "error";
         readinessDetails.pgvector = {
           status: "error",
-          message: `Erro ao executar a função match_documents pgvector: ${rpcError.message}`,
+          message: `Erro ao executar a função RPC de pgvector: ${rpcError.message}`,
         };
       }
     }

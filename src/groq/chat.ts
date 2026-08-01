@@ -1,13 +1,9 @@
 import dotenv from "dotenv";
-import Groq from "groq-sdk";
 import { env } from "../config/env.js";
+import { LlmFactoryService } from "../services/llm-factory.service.js";
 import { groqChatCircuitBreaker } from "../services/circuit-breaker.service.js";
 
 dotenv.config();
-
-const groq = new Groq({
-  apiKey: env.GROQ_API_KEY,
-});
 
 /**
  * Performs a promise with timeout capability.
@@ -102,25 +98,22 @@ ${question}`;
 
   const apiCall = () =>
     withTimeout(
-      groq.chat.completions.create({
-        model,
-        messages: [
+      LlmFactoryService.chatComplete(
+        [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        temperature,
-      }),
+        { model, temperature }
+      ),
       timeoutLimit
     );
 
-  const response = await groqChatCircuitBreaker.execute(() =>
+  const answer = await groqChatCircuitBreaker.execute(() =>
     retryWithBackoff(apiCall, retryCount, env.LLM_RETRY_DELAY)
   );
 
-  const answer = response.choices?.[0]?.message?.content;
-
   if (!answer) {
-    throw new Error("O Groq retornou uma resposta vazia.");
+    throw new Error("A geração de resposta do LLM retornou um conteúdo vazio.");
   }
 
   return answer.trim();

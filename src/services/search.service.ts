@@ -68,8 +68,32 @@ export class SearchService {
     }
     console.log(`[SEARCH] dimensão enviada para a RPC do Supabase: ${finalEmbedding.length}`);
 
-    // 3. Query pgvector via match_documents RPC with slightly higher limit to handle post-filtering deduplication
+    // [DIAGNOSTIC LOGS] Contagem de registros na tabela knowledge_chunks antes da busca
+    let totalRecordCount = 0;
+    const isTest = process.env.SUPABASE_SERVICE_ROLE_KEY === "dummy_key";
+    if (!isTest) {
+      try {
+        const { count, error: countError } = await supabase
+          .from("knowledge_chunks")
+          .select("*", { count: "exact", head: true });
+        if (!countError && count !== null) {
+          totalRecordCount = count;
+        } else if (countError) {
+          console.error(`[SEARCH] Erro ao obter contagem de registros em knowledge_chunks: ${countError.message}`);
+        }
+      } catch (err) {
+        console.warn(`[SEARCH] Erro ao obter contagem de registros em knowledge_chunks:`, err);
+      }
+    } else {
+      console.log(`[SEARCH] Ambiente de teste detectado, pulando contagem de registros em knowledge_chunks.`);
+    }
+    console.log(`[SEARCH] Registros na tabela 'knowledge_chunks' antes de executar a busca: ${totalRecordCount}`);
+
+    // 3. Query pgvector via match_documents RPC (with fallback to match_knowledge_chunks)
     const rawLimit = Math.max(topK * 2, 20);
+
+    console.log(`[SEARCH] Consulta RPC utilizada: rpc("match_documents", { query_embedding: [array de dimensão ${finalEmbedding.length}], match_count: ${rawLimit} })`);
+    console.log(`[SEARCH] Filtros ativos: Não existem filtros por tenant, organização, usuário ou status que eliminem registros na tabela ou na RPC.`);
 
     let dbQuery = supabase.rpc("match_documents", {
       query_embedding: finalEmbedding,
@@ -77,6 +101,7 @@ export class SearchService {
     });
 
     if (activeDocumentIdFilters !== null) {
+      console.log(`[SEARCH] Aplicando filtro PostgREST de document_id: ${JSON.stringify(activeDocumentIdFilters)}`);
       if (activeDocumentIdFilters.length === 1) {
         dbQuery = dbQuery.eq("document_id", activeDocumentIdFilters[0]);
       } else {
@@ -84,26 +109,60 @@ export class SearchService {
       }
     }
 
-    const { data: rawResults, error: rpcError } = await dbQuery;
+    let rawResults: any[] | null = null;
+    let rpcError: any = null;
 
+    try {
+      const response = await dbQuery;
+      if (response.error) {
+        rpcError = response.error;
+      } else {
+        rawResults = response.data;
+      }
+    } catch (err: any) {
+      rpcError = err;
+    }
+
+    // Fallback if match_documents failed
     if (rpcError) {
-      throw new Error(`Erro na busca vetorial por RPC: ${rpcError.message}`);
+      console.warn(`[SEARCH] RPC 'match_documents' falhou ou não existe (${rpcError.message || rpcError}). Tentando fallback para 'match_knowledge_chunks'...`);
+      let fallbackQuery = supabase.rpc("match_knowledge_chunks", {
+        query_embedding: finalEmbedding,
+        match_count: rawLimit,
+      });
+
+      if (activeDocumentIdFilters !== null) {
+        if (activeDocumentIdFilters.length === 1) {
+          fallbackQuery = fallbackQuery.eq("document_id", activeDocumentIdFilters[0]);
+        } else {
+          fallbackQuery = fallbackQuery.in("document_id", activeDocumentIdFilters);
+        }
+      }
+
+      try {
+        const response = await fallbackQuery;
+        if (response.error) {
+          throw response.error;
+        } else {
+          rawResults = response.data;
+          rpcError = null; // Cleared since fallback succeeded
+        }
+      } catch (fallbackErr: any) {
+        throw new Error(`Erro na busca vetorial por RPC: ${fallbackErr.message || fallbackErr}`);
+      }
     }
 
     const results = (rawResults as any[]) || [];
+    console.log(`[SEARCH] Resultados brutos retornados pela RPC (${results.length}):`);
 
     // 4. Post-process: extract clean text, parse metadata, deduplicate and apply threshold
     const uniqueResults: SearchResultItem[] = [];
     const seenTexts = new Set<string>();
 
-    for (const item of results) {
+    for (let idx = 0; idx < results.length; idx++) {
+      const item = results[idx];
       if (!item) continue;
       const score = item.similarity ?? 0;
-
-      // Skip if below similarity threshold
-      if (score < scoreThreshold) {
-        continue;
-      }
 
       // Extract clean text and parse embedded metadata block
       let cleanText = item.content ?? "";
@@ -111,8 +170,16 @@ export class SearchService {
       if (metaMatch) {
         cleanText = metaMatch[1] ?? "";
       }
-
       cleanText = cleanText.trim();
+
+      console.log(`  - Resultado ${idx + 1}: chunk_id=${item.id}, document_id=${item.document_id}, similarity=${score}, scoreThreshold=${scoreThreshold}`);
+
+      // Skip if below similarity threshold
+      if (score < scoreThreshold) {
+        console.log(`    [THRESHOLD FILTER] Descartado: score ${score} é menor que o threshold mínimo ${scoreThreshold} para texto: "${cleanText.substring(0, 30)}..."`);
+        continue;
+      }
+
       const textKey = (cleanText ?? "").toLowerCase();
 
       // Deduplicate
@@ -124,6 +191,8 @@ export class SearchService {
           score,
           text: cleanText,
         });
+      } else {
+        console.log(`    [DEDUPLICATE FILTER] Descartado por texto duplicado: "${cleanText.substring(0, 30)}..."`);
       }
 
       if (uniqueResults.length >= topK) {

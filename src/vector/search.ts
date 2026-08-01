@@ -44,16 +44,43 @@ export async function searchKnowledge(
   // Request a slightly higher match count to compensate for deduplications during post-processing
   const rawLimit = limit * 2;
 
-  const { data, error } = await supabase.rpc("match_documents", {
-    query_embedding: finalEmbedding,
-    match_count: rawLimit,
-  });
+  let rawData: any = null;
+  let rpcError: any = null;
 
-  if (error) {
-    throw new Error(`Erro na busca de documentos por RPC: ${error.message}`);
+  try {
+    const response = await supabase.rpc("match_documents", {
+      query_embedding: finalEmbedding,
+      match_count: rawLimit,
+    });
+    if (response.error) {
+      rpcError = response.error;
+    } else {
+      rawData = response.data;
+    }
+  } catch (err: any) {
+    rpcError = err;
   }
 
-  const results = (data as SearchResult[]) || [];
+  // Fallback to match_knowledge_chunks if match_documents fails or doesn't exist
+  if (rpcError) {
+    console.warn(`[SEARCH KNOWLEDGE] RPC 'match_documents' falhou ou não existe (${rpcError.message || rpcError}). Tentando fallback para 'match_knowledge_chunks'...`);
+    try {
+      const response = await supabase.rpc("match_knowledge_chunks", {
+        query_embedding: finalEmbedding,
+        match_count: rawLimit,
+      });
+      if (response.error) {
+        throw response.error;
+      } else {
+        rawData = response.data;
+        rpcError = null; // Cleared
+      }
+    } catch (fallbackErr: any) {
+      throw new Error(`Erro na busca de documentos por RPC (tanto match_documents quanto match_knowledge_chunks falharam): ${fallbackErr.message || fallbackErr}`);
+    }
+  }
+
+  const results = (rawData as SearchResult[]) || [];
 
   const uniqueResults: SearchResult[] = [];
   const textKeys = new Set<string>();
