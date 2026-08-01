@@ -275,6 +275,33 @@ export class DocumentService {
   }
 
   /**
+   * Retrieves completed documents for reindexing, bypassing any dependency on the legacy documents table.
+   */
+  async getCompletedDocumentsForReindexing(): Promise<{ id: string; file_name: string }[]> {
+    try {
+      const { data, error } = await supabase
+        .from("knowledge_documents")
+        .select("id, file_name");
+
+      if (error) {
+        throw error;
+      }
+
+      return (data || []).map(d => ({ id: d.id, file_name: d.file_name }));
+    } catch (dbError: any) {
+      logger.warn(`[REINDEX ALL] Falha ao buscar de knowledge_documents diretamente: ${dbError.message || dbError}. Tentando fallback via listDocuments para testes...`);
+      try {
+        const docs = await this.listDocuments();
+        return docs
+          .filter(doc => doc.processingStatus === "completed")
+          .map(doc => ({ id: doc.id, file_name: doc.filename }));
+      } catch (fallbackError: any) {
+        throw dbError; // throw original if fallback fails
+      }
+    }
+  }
+
+  /**
    * Reindexes an existing document by ID (regenerating embeddings for its chunks)
    */
   async reindexDocument(id: string): Promise<any> {
@@ -314,27 +341,6 @@ export class DocumentService {
       }
     }
 
-    // Fallback: If not found, try documents table (legacy)
-    if (!kDocId) {
-      try {
-        const doc = await this.getDocumentById(id);
-        filename = doc.filename;
-
-        const { data: kDoc, error: kDocError } = await supabase
-          .from("knowledge_documents")
-          .select("id, file_name")
-          .eq("file_name", doc.filename)
-          .maybeSingle();
-
-        if (!kDocError && kDoc) {
-          kDocId = kDoc.id;
-          filename = kDoc.file_name;
-        }
-      } catch (err) {
-        // Safe to ignore / let it proceed to handle missing table scenario
-      }
-    }
-
     if (!kDocId) {
       throw new NotFoundError(`Documento de conhecimento correspondente a '${id}' não encontrado.`);
     }
@@ -352,21 +358,6 @@ export class DocumentService {
 
     if (!chunks || chunks.length === 0) {
       throw new ValidationError("Não há trechos de texto na base para reindexar.");
-    }
-
-    // Set status to processing (optional/safely wrapped)
-    try {
-      // Find corresponding ID in documents table
-      const { data: docInDb } = await supabase
-        .from("documents")
-        .select("id")
-        .eq("filename", filename)
-        .maybeSingle();
-      if (docInDb) {
-        await this.updateDocument(docInDb.id, { processingStatus: "processing" });
-      }
-    } catch (err) {
-      // Ignore if table doesn't exist
     }
 
     const startTime = performance.now();
@@ -449,20 +440,6 @@ export class DocumentService {
         if (insErr) throw insErr;
       }
 
-      // Update processing status and timestamp (optional/safely wrapped)
-      try {
-        const { data: docInDb } = await supabase
-          .from("documents")
-          .select("id")
-          .eq("filename", filename)
-          .maybeSingle();
-        if (docInDb) {
-          await this.updateDocument(docInDb.id, { processingStatus: "completed" });
-        }
-      } catch (err) {
-        // Ignore if table doesn't exist
-      }
-
       await supabase
         .from("knowledge_documents")
         .update({ updated_at: timestamp })
@@ -489,20 +466,6 @@ export class DocumentService {
 
     } catch (error: any) {
       const duration = Math.round(performance.now() - startTime);
-
-      // Update processing status and timestamp (optional/safely wrapped)
-      try {
-        const { data: docInDb } = await supabase
-          .from("documents")
-          .select("id")
-          .eq("filename", filename)
-          .maybeSingle();
-        if (docInDb) {
-          await this.updateDocument(docInDb.id, { processingStatus: "failed" });
-        }
-      } catch (err) {
-        // Ignore if table doesn't exist
-      }
 
       await indexingHistoryService.record({
         document: filename,
@@ -534,24 +497,10 @@ export class DocumentService {
 
     let completedDocs: { id: string; file_name: string }[] = [];
     try {
-      const { data: kDocs, error: kDocsErr } = await supabase
-        .from("knowledge_documents")
-        .select("id, file_name");
-
-      if (kDocsErr) {
-        throw kDocsErr;
-      }
-      completedDocs = (kDocs || []).map(d => ({ id: d.id, file_name: d.file_name }));
+      completedDocs = await this.getCompletedDocumentsForReindexing();
     } catch (dbError: any) {
-      logger.warn(`[REINDEX ALL] Falha ao buscar de knowledge_documents diretamente: ${dbError.message || dbError}. Tentando fallback via listDocuments...`);
-      try {
-        const docs = await this.listDocuments();
-        completedDocs = docs
-          .filter(doc => doc.processingStatus === "completed")
-          .map(doc => ({ id: doc.id, file_name: doc.filename }));
-      } catch (fallbackError: any) {
-        throw dbError; // throw the original error if fallback also fails
-      }
+      logger.error(`[REINDEX ALL] Falha crítica ao buscar documentos para reindexar: ${dbError.message || dbError}`);
+      throw dbError;
     }
 
     logger.info(`[REINDEX ALL] Documentos identificados para reindexação: ${completedDocs.length}`);

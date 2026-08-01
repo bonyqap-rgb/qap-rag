@@ -248,6 +248,7 @@ test("API POST /documents/reindex-all - rejects request with 401 if unauthorized
 test("API POST /documents/reindex-all - reindexes all completed documents when authorized", async () => {
   const originalList = documentService.listDocuments;
   const originalReindex = documentService.reindexDocument;
+  const originalGetCompleted = documentService.getCompletedDocumentsForReindexing;
 
   const mockDocs = [
     {
@@ -281,6 +282,9 @@ test("API POST /documents/reindex-all - reindexes all completed documents when a
   const reindexedIds: string[] = [];
 
   documentService.listDocuments = async () => mockDocs as any;
+  documentService.getCompletedDocumentsForReindexing = async () => [
+    { id: "doc-1", file_name: "doc1.pdf" }
+  ];
   documentService.reindexDocument = async (id: string) => {
     reindexedIds.push(id);
     return {
@@ -308,5 +312,6 @@ test("API POST /documents/reindex-all - reindexes all completed documents when a
   } finally {
     documentService.listDocuments = originalList;
     documentService.reindexDocument = originalReindex;
+    documentService.getCompletedDocumentsForReindexing = originalGetCompleted;
   }
 });
