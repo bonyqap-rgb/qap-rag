@@ -50,3 +50,32 @@ BEGIN
   LIMIT match_count;
 END;
 $$;
+
+-- 7. Create the match_knowledge_chunks RPC as a synchronized alias for match_documents
+CREATE OR REPLACE FUNCTION public.match_knowledge_chunks (
+  query_embedding vector(1536),
+  match_count int
+)
+RETURNS TABLE (
+  id uuid,
+  document_id uuid,
+  chunk_index int,
+  content text,
+  similarity double precision
+)
+LANGUAGE plpgsql SECURITY DEFINER
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    kc.id,
+    kc.document_id,
+    kc.chunk_index,
+    kc.content,
+    1 - (kc.embedding <=> query_embedding) AS similarity
+  FROM public.knowledge_chunks kc
+  WHERE kc.embedding IS NOT NULL
+  ORDER BY kc.embedding <=> query_embedding
+  LIMIT match_count;
+END;
+$$;
