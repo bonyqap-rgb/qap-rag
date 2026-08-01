@@ -40,16 +40,20 @@ export class ContextBuilderService {
 
     // 2. Sort to preserve document order (by documentId, then chunkIndex ascending)
     const sortedChunks = [...uniqueChunks].sort((a, b) => {
-      if (a.documentId !== b.documentId) {
-        return a.documentId.localeCompare(b.documentId);
+      const docA = a?.documentId ?? "";
+      const docB = b?.documentId ?? "";
+      if (docA !== docB) {
+        return docA.localeCompare(docB);
       }
-      return a.chunkIndex - b.chunkIndex;
+      const indexA = a?.chunkIndex ?? 0;
+      const indexB = b?.chunkIndex ?? 0;
+      return indexA - indexB;
     });
 
     // 3. Construct context respecting maximum context size
     let context = "";
     for (const chunk of sortedChunks) {
-      const chunkText = chunk.text.trim();
+      const chunkText = (chunk?.text ?? "").trim();
       if (!chunkText) continue;
 
       if (context === "") {
