@@ -71,7 +71,7 @@ function validateEnv(): EnvVariables {
       : ["https://qap-ia.lovable.app", "https://hoppscotch.io"],
     DEFAULT_CHAT_MODEL: process.env.GROQ_CHAT_MODEL || "llama-3.3-70b-versatile",
     DEFAULT_TOP_K: process.env.DEFAULT_TOP_K ? parseInt(process.env.DEFAULT_TOP_K, 10) : 5,
-    DEFAULT_MIN_SCORE: process.env.DEFAULT_MIN_SCORE ? parseFloat(process.env.DEFAULT_MIN_SCORE) : 0.3,
+    DEFAULT_MIN_SCORE: process.env.DEFAULT_MIN_SCORE ? parseFloat(process.env.DEFAULT_MIN_SCORE) : 0.15,
     DEFAULT_MAX_CONTEXT_SIZE: process.env.DEFAULT_MAX_CONTEXT_SIZE ? parseInt(process.env.DEFAULT_MAX_CONTEXT_SIZE, 10) : 4000,
 
     // Cache defaults: TTL 1 day (86400s), max size 1000

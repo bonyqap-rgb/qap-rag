@@ -20,7 +20,7 @@ export interface SearchResult {
 export async function searchKnowledge(
   embedding: number[],
   limit = 5,
-  similarityThreshold = 0.3
+  similarityThreshold = 0.15
 ): Promise<SearchResult[]> {
   if (!embedding || embedding.length === 0) {
     throw new Error("Vetor de busca de embedding inválido ou vazio.");
