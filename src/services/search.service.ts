@@ -172,10 +172,22 @@ export class SearchService {
       }
       cleanText = cleanText.trim();
 
+      // Check if this chunk is a direct requested match (e.g., contains the requested Article number)
+      let isRequestedMatch = false;
+      const articleMatch = queryText.match(/artigo\s*(\d+)/i);
+      if (articleMatch) {
+        const articleNum = articleMatch[1];
+        const targetPattern = new RegExp(`artigo\\s*${articleNum}\\b`, "i");
+        if (targetPattern.test(cleanText)) {
+          isRequestedMatch = true;
+          console.log(`[SEARCH] Encontrado chunk contendo o artigo solicitado (${articleNum}) diretamente no texto. Ignorando restrição de threshold!`);
+        }
+      }
+
       console.log(`  - Resultado ${idx + 1}: chunk_id=${item.id}, document_id=${item.document_id}, similarity=${score}, scoreThreshold=${scoreThreshold}`);
 
-      // Skip if below similarity threshold
-      if (score < scoreThreshold) {
+      // Skip if below similarity threshold AND not a requested match
+      if (score < scoreThreshold && !isRequestedMatch) {
         console.log(`    [THRESHOLD FILTER] Descartado: score ${score} é menor que o threshold mínimo ${scoreThreshold} para texto: "${cleanText.substring(0, 30)}..."`);
         continue;
       }
