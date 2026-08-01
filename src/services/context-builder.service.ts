@@ -5,6 +5,7 @@ export interface ContextChunkInput {
   chunkIndex: number;
   text: string;
   score?: number;
+  filename?: string;
 }
 
 export class ContextBuilderService {
@@ -53,8 +54,13 @@ export class ContextBuilderService {
     // 3. Construct context respecting maximum context size
     let context = "";
     for (const chunk of sortedChunks) {
-      const chunkText = (chunk?.text ?? "").trim();
+      let chunkText = (chunk?.text ?? "").trim();
       if (!chunkText) continue;
+
+      // Prepend document source metadata to prevent the LLM from declaring insufficiency of context
+      if (chunk.filename) {
+        chunkText = `[Documento: ${chunk.filename}]\n${chunkText}`;
+      }
 
       if (context === "") {
         if (chunkText.length > maxContextSize) {

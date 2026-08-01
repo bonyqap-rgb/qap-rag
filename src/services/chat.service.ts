@@ -184,7 +184,13 @@ export class ChatService {
     }
 
     // 6. Build Context and Prompts
-    const context = ContextBuilderService.buildContext(searchResults, maxContextSize);
+    // Enrich search results with filenames from docMap to provide clear grounding references
+    const enrichedSearchResults = searchResults.map((r) => ({
+      ...r,
+      filename: docMap.get(r.documentId) || "Desconhecido",
+    }));
+
+    const context = ContextBuilderService.buildContext(enrichedSearchResults, maxContextSize);
     const systemPrompt = PromptBuilderService.buildSystemPrompt();
     const userPrompt = PromptBuilderService.buildUserPrompt(question, context);
 
