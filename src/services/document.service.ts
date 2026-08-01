@@ -182,95 +182,124 @@ export class DocumentService {
       throw new ValidationError("O ID do documento não foi informado.");
     }
 
-    const doc = await this.repository.getById(id);
-    if (!doc) {
+    // Fetch knowledge document matching the id
+    const { data: kDoc, error: kDocErr } = await supabase
+      .from("knowledge_documents")
+      .select("id, file_name")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (kDocErr) {
+      throw kDocErr;
+    }
+
+    if (!kDoc) {
       throw new NotFoundError(`Documento com ID '${id}' não encontrado.`);
     }
 
-    // Try executing SQL transaction via RPC
-    const { data: rpcSuccess, error: rpcError } = await supabase.rpc("delete_document_transaction", { doc_id: id });
+    // Delete chunks
+    const { error: chunksErr } = await supabase
+      .from("knowledge_chunks")
+      .delete()
+      .eq("document_id", kDoc.id);
+    if (chunksErr) throw chunksErr;
 
-    if (rpcError) {
-      logger.warn(`RPC delete_document_transaction falhou: ${rpcError.message}. Executando exclusão sequencial fallback...`);
-
-      // Fallback: Sequential deletion
-      // Find knowledge document matching the filename
-      const { data: kDoc } = await supabase
-        .from("knowledge_documents")
-        .select("id")
-        .eq("file_name", doc.filename)
-        .maybeSingle();
-
-      if (kDoc) {
-        // Delete chunks
-        const { error: chunksErr } = await supabase
-          .from("knowledge_chunks")
-          .delete()
-          .eq("document_id", kDoc.id);
-        if (chunksErr) throw chunksErr;
-
-        // Delete knowledge document
-        const { error: kDocErr } = await supabase
-          .from("knowledge_documents")
-          .delete()
-          .eq("id", kDoc.id);
-        if (kDocErr) throw kDocErr;
-      }
-
-      // Delete document metadata from documents table
-      const deleted = await this.repository.delete(id);
-      if (!deleted) {
-        throw new NotFoundError(`Documento com ID '${id}' não pôde ser excluído.`);
-      }
-    } else if (!rpcSuccess) {
-      // If RPC returned false, it means document wasn't found or already deleted
-      throw new NotFoundError(`Documento com ID '${id}' não encontrado.`);
-    }
+    // Delete knowledge document
+    const { error: kDocErr2 } = await supabase
+      .from("knowledge_documents")
+      .delete()
+      .eq("id", kDoc.id);
+    if (kDocErr2) throw kDocErr2;
   }
 
   /**
    * Retrieves statistics of the knowledge base.
    */
   async getKnowledgeBaseStats(): Promise<any> {
-    const { data, error } = await supabase.rpc("get_knowledge_base_stats");
-    if (error) {
-      logger.warn(`RPC get_knowledge_base_stats falhou ou não existe: ${error.message}. Calculando via consultas de fallback...`);
-      return this.getStatsFallback();
+    try {
+      const { count: totalKDocs, error: errDocs } = await supabase
+        .from("knowledge_documents")
+        .select("*", { count: "exact", head: true });
+
+      if (errDocs) throw errDocs;
+
+      const { count: totalChunks, error: errChunks } = await supabase
+        .from("knowledge_chunks")
+        .select("*", { count: "exact", head: true });
+
+      if (errChunks) throw errChunks;
+
+      const { data: lastKDocs, error: errLast } = await supabase
+        .from("knowledge_documents")
+        .select("created_at")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (errLast) throw errLast;
+      const lastIndexed = lastKDocs && lastKDocs.length > 0 ? lastKDocs[0].created_at : null;
+
+      // Calculate total size and average size of chunk content
+      const { data: chunks, error: errSize } = await supabase
+        .from("knowledge_chunks")
+        .select("content");
+
+      if (errSize) throw errSize;
+
+      const totalSize = (chunks || []).reduce((sum, chunk) => sum + (chunk.content?.length || 0), 0);
+      const avgSize = chunks && chunks.length > 0 ? totalSize / chunks.length : 0;
+
+      const avgChunksPerDoc = totalKDocs && totalKDocs > 0 ? parseFloat(((totalChunks || 0) / totalKDocs).toFixed(2)) : 0;
+
+      return {
+        total_documentos: totalKDocs || 0,
+        documentos_indexados: totalKDocs || 0,
+        documentos_pendentes: 0,
+        total_chunks: totalChunks || 0,
+        media_chunks_por_documento: avgChunksPerDoc,
+        tamanho_medio_chunks: parseFloat(avgSize.toFixed(2)),
+        data_ultima_indexacao: lastIndexed,
+        quantidade_vetores_armazenados: totalChunks || 0,
+      };
+    } catch (err: any) {
+      logger.error(`Erro ao carregar estatísticas do painel: ${err.message || err}`);
+      throw err;
     }
-    return data;
   }
 
   /**
-   * Backup/Fallback stats calculator if PostgreSQL RPC is unavailable.
+   * Retrieves statistics of the knowledge base with camelCase for the API /documents/statistics
    */
-  private async getStatsFallback(): Promise<any> {
-    const { count: totalDocs } = await supabase.from("documents").select("*", { count: "exact", head: true });
-    const { count: indexedDocs } = await supabase.from("documents").select("*", { count: "exact", head: true }).eq("processing_status", "completed");
-    const { count: pendingDocs } = await supabase.from("documents").select("*", { count: "exact", head: true }).eq("processing_status", "pending");
-    const { count: totalChunks } = await supabase.from("knowledge_chunks").select("*", { count: "exact", head: true });
-    const { count: totalKDocs } = await supabase.from("knowledge_documents").select("*", { count: "exact", head: true });
+  async getKnowledgeBaseStatistics(): Promise<{
+    totalDocuments: number;
+    totalChunks: number;
+    totalSize: number;
+    indexedDocuments: number;
+  }> {
+    const { count: totalDocs, error: errDocs } = await supabase
+      .from("knowledge_documents")
+      .select("*", { count: "exact", head: true });
 
-    const { data: lastKDocs } = await supabase.from("knowledge_documents").select("created_at").order("created_at", { ascending: false }).limit(1);
-    const lastIndexed = lastKDocs && lastKDocs.length > 0 ? lastKDocs[0].created_at : null;
+    if (errDocs) throw errDocs;
 
-    const { data: chunksSample } = await supabase.from("knowledge_chunks").select("content").limit(100);
-    let avgSize = 0;
-    if (chunksSample && chunksSample.length > 0) {
-      const totalLen = chunksSample.reduce((acc, c) => acc + (c.content?.length || 0), 0);
-      avgSize = totalLen / chunksSample.length;
-    }
+    const { count: totalChks, error: errChunks } = await supabase
+      .from("knowledge_chunks")
+      .select("*", { count: "exact", head: true });
 
-    const avgChunksPerDoc = totalKDocs && totalKDocs > 0 ? parseFloat(((totalChunks || 0) / totalKDocs).toFixed(2)) : 0;
+    if (errChunks) throw errChunks;
+
+    const { data: chunks, error: errSize } = await supabase
+      .from("knowledge_chunks")
+      .select("content");
+
+    if (errSize) throw errSize;
+
+    const totalSize = (chunks || []).reduce((sum, chunk) => sum + (chunk.content?.length || 0), 0);
 
     return {
-      total_documentos: totalDocs || 0,
-      documentos_indexados: indexedDocs || 0,
-      documentos_pendentes: pendingDocs || 0,
-      total_chunks: totalChunks || 0,
-      media_chunks_por_documento: avgChunksPerDoc,
-      tamanho_medio_chunks: parseFloat(avgSize.toFixed(2)),
-      data_ultima_indexacao: lastIndexed,
-      quantidade_vetores_armazenados: totalChunks || 0,
+      totalDocuments: totalDocs || 0,
+      totalChunks: totalChks || 0,
+      totalSize,
+      indexedDocuments: totalDocs || 0
     };
   }
 

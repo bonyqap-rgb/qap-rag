@@ -42,64 +42,12 @@ export class SearchService {
       throw new Error("O texto de busca não pode ser vazio.");
     }
 
-    // 1. Resolve metadata filters (category and/or documentType) through documents and knowledge_documents tables
+    // 1. Resolve metadata filters
     let activeDocumentIdFilters: string[] | null = null;
-
-    if (filters?.category || filters?.documentType) {
-      // Find matching documents in standard documents metadata table
-      let docQuery = supabase.from("documents").select("filename");
-
-      if (filters.category) {
-        docQuery = docQuery.eq("category", filters.category);
-      }
-      if (filters.documentType) {
-        docQuery = docQuery.eq("mime_type", filters.documentType);
-      }
-
-      const { data: matchedDocs, error: docError } = await docQuery;
-
-      if (docError) {
-        throw new Error(`Erro ao consultar documentos por filtro: ${docError.message}`);
-      }
-
-      if (!matchedDocs || matchedDocs.length === 0) {
-        // Return immediately if no documents match category/type filters (Avoid unnecessary vector search)
-        this.logSearch(performance.now() - startTime, 0, 0, []);
-        return [];
-      }
-
-      const filenames = matchedDocs.map((d) => d.filename);
-
-      // Find corresponding IDs in knowledge_documents table
-      const { data: matchedKDocs, error: kDocError } = await supabase
-        .from("knowledge_documents")
-        .select("id")
-        .in("file_name", filenames);
-
-      if (kDocError) {
-        throw new Error(`Erro ao consultar documentos de conhecimento por filtro: ${kDocError.message}`);
-      }
-
-      if (!matchedKDocs || matchedKDocs.length === 0) {
-        this.logSearch(performance.now() - startTime, 0, 0, []);
-        return [];
-      }
-
-      activeDocumentIdFilters = matchedKDocs.map((kd) => kd.id);
-    }
 
     // Combine with specific documentId filter if provided
     if (filters?.documentId) {
-      if (activeDocumentIdFilters !== null) {
-        // If we already have resolved metadata filters, ensure the requested documentId is among them
-        if (!activeDocumentIdFilters.includes(filters.documentId)) {
-          this.logSearch(performance.now() - startTime, 0, 0, []);
-          return [];
-        }
-        activeDocumentIdFilters = [filters.documentId];
-      } else {
-        activeDocumentIdFilters = [filters.documentId];
-      }
+      activeDocumentIdFilters = [filters.documentId];
     }
 
     // 2. Generate embedding for query text (leverages caching and retries internally)

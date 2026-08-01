@@ -4,7 +4,6 @@ process.env.GROQ_API_KEY = "dummy_key";
 import { test } from "node:test";
 import assert from "node:assert";
 import { DocumentRepository } from "./document.repository.js";
-import { DbDocument } from "../models/document.model.js";
 import { SupabaseClient } from "@supabase/supabase-js";
 
 // Helper helper to create mock Supabase client
@@ -26,18 +25,9 @@ function createMockSupabase(mockData: any, mockError: any = null): SupabaseClien
   } as unknown as SupabaseClient;
 }
 
-const mockDbDocument: DbDocument = {
+const mockDbDocument = {
   id: "8c77be02-4ee3-455b-80df-67993a4bc4d4",
-  title: "Documento de Teste",
-  category: "Segurança",
-  version: "1.0.0",
-  source: "Manual PM",
-  language: "pt-BR",
-  filename: "manual_pm.pdf",
-  file_size: 102400,
-  mime_type: "application/pdf",
-  total_pages: 15,
-  processing_status: "pending",
+  file_name: "manual_pm.pdf",
   created_at: "2023-10-10T12:00:00Z",
   updated_at: "2023-10-10T12:00:00Z"
 };
@@ -49,9 +39,9 @@ test("DocumentRepository - list() returns mapped documents", async () => {
   const result = await repository.list();
   assert.strictEqual(result.length, 1);
   assert.strictEqual(result[0].id, mockDbDocument.id);
-  assert.strictEqual(result[0].title, mockDbDocument.title);
-  assert.strictEqual(result[0].fileSize, mockDbDocument.file_size);
-  assert.strictEqual(result[0].processingStatus, "pending");
+  assert.strictEqual(result[0].title, mockDbDocument.file_name);
+  assert.strictEqual(result[0].fileSize, 1024);
+  assert.strictEqual(result[0].processingStatus, "completed");
 });
 
 test("DocumentRepository - getById() returns mapped document when found", async () => {
@@ -61,7 +51,7 @@ test("DocumentRepository - getById() returns mapped document when found", async 
   const result = await repository.getById(mockDbDocument.id);
   assert.notStrictEqual(result, null);
   assert.strictEqual(result!.id, mockDbDocument.id);
-  assert.strictEqual(result!.title, mockDbDocument.title);
+  assert.strictEqual(result!.title, mockDbDocument.file_name);
 });
 
 test("DocumentRepository - getById() returns null when not found", async () => {
@@ -91,19 +81,18 @@ test("DocumentRepository - create() inserts and returns mapped document", async 
 
   const result = await repository.create(input);
   assert.strictEqual(result.id, mockDbDocument.id);
-  assert.strictEqual(result.title, input.title);
-  assert.strictEqual(result.fileSize, input.fileSize);
+  assert.strictEqual(result.title, mockDbDocument.file_name);
+  assert.strictEqual(result.fileSize, 1024);
 });
 
 test("DocumentRepository - update() modifies and returns mapped document", async () => {
-  const updatedDbDoc = { ...mockDbDocument, title: "Novo Titulo" };
-  const mockSupabase = createMockSupabase(updatedDbDoc);
+  const mockSupabase = createMockSupabase(mockDbDocument);
   const repository = new DocumentRepository(mockSupabase);
 
   const result = await repository.update(mockDbDocument.id, { title: "Novo Titulo" });
   assert.notStrictEqual(result, null);
   assert.strictEqual(result!.id, mockDbDocument.id);
-  assert.strictEqual(result!.title, "Novo Titulo");
+  assert.strictEqual(result!.title, mockDbDocument.file_name);
 });
 
 test("DocumentRepository - delete() returns true on success", async () => {

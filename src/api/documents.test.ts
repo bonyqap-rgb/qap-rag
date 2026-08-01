@@ -44,6 +44,26 @@ const mockDoc: Document = {
   updatedAt: "2023-10-10T12:00:00Z"
 };
 
+test("API GET /documents/statistics - returns base statistics successfully", async () => {
+  const originalGetStats = documentService.getKnowledgeBaseStatistics;
+  const mockStats = {
+    totalDocuments: 10,
+    totalChunks: 100,
+    totalSize: 50000,
+    indexedDocuments: 10
+  };
+  documentService.getKnowledgeBaseStatistics = async () => mockStats;
+
+  try {
+    const res = await fetch(`${baseUrl}/statistics`);
+    assert.strictEqual(res.status, 200);
+    const body = await res.json() as any;
+    assert.deepStrictEqual(body, mockStats);
+  } finally {
+    documentService.getKnowledgeBaseStatistics = originalGetStats;
+  }
+});
+
 test("API GET /documents - returns list of documents", async () => {
   // Mock service
   const originalList = documentService.listDocuments;
