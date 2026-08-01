@@ -232,3 +232,108 @@ test("ChatService.chat - unsupported-model model fallback to default Groq model"
     resetChatImplementation();
   }
 });
+
+test("ChatService.resolveDocuments - resolves 'RDPM' keyword correctly", async () => {
+  const originalFrom = supabase.from;
+  const mockDocs = [
+    { id: "rdpm-uuid-999", file_name: "RDPM_regulamento.pdf" },
+    { id: "other-uuid-888", file_name: "manual_pm.pdf" }
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          then: (resolve: any) => resolve({ data: mockDocs, error: null })
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  try {
+    const res = await ChatService.resolveDocuments("Qual o Artigo 31 do RDPM?");
+    assert.ok(res);
+    assert.strictEqual(res.documentId, "rdpm-uuid-999");
+    assert.strictEqual(res.filename, "RDPM_regulamento.pdf");
+  } finally {
+    supabase.from = originalFrom;
+  }
+});
+
+test("ChatService.chat - performs search with resolved document id when RDPM is mentioned", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  const mockDocs = [
+    { id: "rdpm-uuid-999", file_name: "RDPM_regulamento.pdf" },
+    { id: "other-uuid-888", file_name: "manual_pm.pdf" }
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({ data: [mockDocs[0]], error: null }),
+          then: (resolve: any) => resolve({ data: mockDocs, error: null })
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  let searchedFilters: any = null;
+  SearchService.search = async (query, topK, score, filters) => {
+    searchedFilters = filters;
+    return [
+      {
+        documentId: "rdpm-uuid-999",
+        chunkIndex: 0,
+        score: 0.9,
+        text: "Artigo 31: O militar deve...",
+      }
+    ];
+  };
+
+  setChatImplementation(async () => {
+    return "Resposta baseada no Artigo 31 do RDPM.";
+  });
+
+  try {
+    const res = await ChatService.chat("Qual o Artigo 31 do RDPM?");
+    assert.strictEqual(res.answer, "Resposta baseada no Artigo 31 do RDPM.");
+    assert.ok(searchedFilters);
+    assert.strictEqual(searchedFilters.documentId, "rdpm-uuid-999");
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});
+
+test("ChatService.chat - insufficiency logs and returns empty answer when resultsCount === 0", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  SearchService.search = async () => [];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          then: (resolve: any) => resolve({ data: [], error: null })
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  try {
+    const res = await ChatService.chat("Questão inexistente");
+    assert.strictEqual(res.answer, "Não encontrei essa informação na base de conhecimento.");
+    assert.strictEqual(res.sources.length, 0);
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+  }
+});
