@@ -15,42 +15,12 @@ export async function runMigration(): Promise<{ success: boolean; migratedCount:
   }
 
   const documentService = new DocumentService();
-  const docs = await documentService.listDocuments();
-  const completedDocs = docs.filter(doc => doc.processingStatus === "completed");
-
-  console.log(`[MIGRATE VECTORS] Documentos identificados para migração: ${completedDocs.length}`);
-  const errors: any[] = [];
-  let migratedCount = 0;
-
-  for (const doc of completedDocs) {
-    console.log(`\n[MIGRATE VECTORS] Migrando documento: "${doc.title}" (ID: ${doc.id}, Arquivo: ${doc.filename})...`);
-    try {
-      const result = await documentService.reindexDocument(doc.id);
-      if (result.success) {
-        migratedCount++;
-        console.log(`[MIGRATE VECTORS] Sucesso! Chunks migrados: ${result.chunksCount} em ${result.durationMs}ms`);
-      } else {
-        const message = result.message || "Erro desconhecido durante reindexação";
-        console.error(`[MIGRATE VECTORS] Falha no documento ${doc.filename}: ${message}`);
-        errors.push({ id: doc.id, filename: doc.filename, error: message });
-      }
-    } catch (err: any) {
-      const errMsg = err.message || String(err);
-      console.error(`[MIGRATE VECTORS] Erro inesperado no documento ${doc.filename}:`, errMsg);
-      errors.push({ id: doc.id, filename: doc.filename, error: errMsg });
-    }
-  }
-
-  console.log("\n=== MIGRAÇÃO VETORIAL CONCLUÍDA ===");
-  console.log(`[MIGRATE VECTORS] Sucesso: ${migratedCount} de ${completedDocs.length} documentos migrados.`);
-  if (errors.length > 0) {
-    console.log(`[MIGRATE VECTORS] Erros de migração detectados: ${errors.length}`);
-  }
+  const result = await documentService.reindexAllCompletedDocuments();
 
   return {
-    success: errors.length === 0,
-    migratedCount,
-    errors
+    success: result.success,
+    migratedCount: result.documentsProcessed,
+    errors: result.errors
   };
 }
 
