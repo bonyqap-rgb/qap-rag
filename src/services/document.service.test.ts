@@ -3,6 +3,7 @@ import assert from "node:assert";
 import { DocumentService, ValidationError, NotFoundError } from "./document.service.js";
 import { DocumentRepository } from "../repositories/document.repository.js";
 import { Document } from "../models/document.model.js";
+import { supabase } from "../config/supabase.js";
 
 // Dummy Document object
 const sampleDocument: Document = {
@@ -253,25 +254,67 @@ test("DocumentService - updateDocument() throws NotFoundError if not found", asy
 });
 
 test("DocumentService - deleteDocument() successfully calls repository", async () => {
-  const repo = new MockDocumentRepository();
-  const service = new DocumentService(repo);
+  const originalFrom = supabase.from;
+  let deleteCalledOnTable: string[] = [];
 
-  await service.deleteDocument("some-id");
-  assert.strictEqual(repo.lastDeletedId, "some-id");
+  supabase.from = function(table: string) {
+    const builder = {
+      select: () => builder,
+      eq: (col: string, val: any) => builder,
+      maybeSingle: () => {
+        if (table === "knowledge_documents") {
+          return Promise.resolve({ data: { id: "some-id", file_name: "test.pdf" }, error: null });
+        }
+        return Promise.resolve({ data: null, error: null });
+      },
+      delete: () => {
+        deleteCalledOnTable.push(table);
+        return builder;
+      },
+      then: (resolve: any) => resolve({ data: [], error: null })
+    };
+    return builder as any;
+  };
+
+  try {
+    const repo = new MockDocumentRepository();
+    const service = new DocumentService(repo);
+
+    await service.deleteDocument("some-id");
+    assert.deepStrictEqual(deleteCalledOnTable, ["knowledge_chunks", "knowledge_documents"]);
+  } finally {
+    supabase.from = originalFrom;
+  }
 });
 
 test("DocumentService - deleteDocument() throws NotFoundError if not found", async () => {
-  const repo = new MockDocumentRepository();
-  repo.shouldFind = false;
-  const service = new DocumentService(repo);
+  const originalFrom = supabase.from;
 
-  await assert.rejects(
-    async () => {
-      await service.deleteDocument("non-existent");
-    },
-    (err: Error) => {
-      assert.ok(err instanceof NotFoundError);
-      return true;
-    }
-  );
+  supabase.from = function(table: string) {
+    const builder = {
+      select: () => builder,
+      eq: (col: string, val: any) => builder,
+      maybeSingle: () => {
+        return Promise.resolve({ data: null, error: null });
+      }
+    };
+    return builder as any;
+  };
+
+  try {
+    const repo = new MockDocumentRepository();
+    const service = new DocumentService(repo);
+
+    await assert.rejects(
+      async () => {
+        await service.deleteDocument("non-existent");
+      },
+      (err: Error) => {
+        assert.ok(err instanceof NotFoundError);
+        return true;
+      }
+    );
+  } finally {
+    supabase.from = originalFrom;
+  }
 });

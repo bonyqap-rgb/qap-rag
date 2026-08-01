@@ -21,6 +21,35 @@ router.get("/", async (_req: Request, res: Response, next: NextFunction) => {
 });
 
 /**
+ * GET /documents/statistics
+ * Retrieves camelCase statistics about the knowledge base using only knowledge_documents and knowledge_chunks.
+ */
+router.get("/statistics", async (req: Request, res: Response, next: NextFunction) => {
+  const start = performance.now();
+  const requestId = req.headers["x-request-id"] as string;
+  try {
+    const stats = await documentService.getKnowledgeBaseStatistics();
+    const duration = parseFloat((performance.now() - start).toFixed(2));
+
+    logger.info("[ADMIN] Consulta de estatísticas (camelCase) realizada com sucesso", {
+      requestId,
+      duration,
+      status: "success",
+    });
+
+    return res.status(200).json(stats);
+  } catch (error) {
+    const duration = parseFloat((performance.now() - start).toFixed(2));
+    logger.error("[ADMIN] Falha ao consultar estatísticas (camelCase)", error, {
+      requestId,
+      duration,
+      status: "error",
+    });
+    next(error);
+  }
+});
+
+/**
  * GET /documents/stats
  * Retrieves statistics about the knowledge base.
  */

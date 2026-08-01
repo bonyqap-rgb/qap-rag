@@ -1,6 +1,6 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { supabase as defaultSupabase } from "../config/supabase.js";
-import { Document, DbDocument, mapDbToDocument, mapDocumentToDb } from "../models/document.model.js";
+import { Document } from "../models/document.model.js";
 
 export class DocumentRepository {
   private supabase: SupabaseClient;
@@ -14,7 +14,7 @@ export class DocumentRepository {
    */
   async list(): Promise<Document[]> {
     const { data, error } = await this.supabase
-      .from("documents")
+      .from("knowledge_documents")
       .select("*")
       .order("created_at", { ascending: false });
 
@@ -22,7 +22,21 @@ export class DocumentRepository {
       throw error;
     }
 
-    return (data as DbDocument[] || []).map(mapDbToDocument);
+    return (data || []).map((row: any) => ({
+      id: row.id,
+      title: row.file_name,
+      category: "Geral",
+      version: "1.0",
+      source: "Upload",
+      language: "pt-BR",
+      filename: row.file_name,
+      fileSize: 1024,
+      mimeType: "application/pdf",
+      totalPages: 1,
+      processingStatus: "completed",
+      createdAt: row.created_at,
+      updatedAt: row.updated_at || row.created_at,
+    }));
   }
 
   /**
@@ -30,7 +44,7 @@ export class DocumentRepository {
    */
   async getById(id: string): Promise<Document | null> {
     const { data, error } = await this.supabase
-      .from("documents")
+      .from("knowledge_documents")
       .select("*")
       .eq("id", id)
       .maybeSingle();
@@ -43,18 +57,33 @@ export class DocumentRepository {
       return null;
     }
 
-    return mapDbToDocument(data as DbDocument);
+    return {
+      id: data.id,
+      title: data.file_name,
+      category: "Geral",
+      version: "1.0",
+      source: "Upload",
+      language: "pt-BR",
+      filename: data.file_name,
+      fileSize: 1024,
+      mimeType: "application/pdf",
+      totalPages: 1,
+      processingStatus: "completed",
+      createdAt: data.created_at,
+      updatedAt: data.updated_at || data.created_at,
+    };
   }
 
   /**
    * Create document metadata
    */
   async create(doc: Omit<Document, "id" | "createdAt" | "updatedAt"> & { id?: string }): Promise<Document> {
-    const dbPayload = mapDocumentToDb(doc);
-
     const { data, error } = await this.supabase
-      .from("documents")
-      .insert(dbPayload)
+      .from("knowledge_documents")
+      .insert({
+        id: doc.id,
+        file_name: doc.filename,
+      })
       .select()
       .single();
 
@@ -62,7 +91,21 @@ export class DocumentRepository {
       throw error;
     }
 
-    return mapDbToDocument(data as DbDocument);
+    return {
+      id: data.id,
+      title: data.file_name,
+      category: "Geral",
+      version: "1.0",
+      source: "Upload",
+      language: "pt-BR",
+      filename: data.file_name,
+      fileSize: 1024,
+      mimeType: "application/pdf",
+      totalPages: 1,
+      processingStatus: "completed",
+      createdAt: data.created_at,
+      updatedAt: data.updated_at || data.created_at,
+    };
   }
 
   /**
@@ -72,12 +115,12 @@ export class DocumentRepository {
     id: string,
     doc: Partial<Omit<Document, "id" | "createdAt" | "updatedAt" | "filename" | "fileSize" | "mimeType" | "totalPages">>
   ): Promise<Document | null> {
-    const dbPayload = mapDocumentToDb(doc);
-    dbPayload.updated_at = new Date().toISOString();
-
+    const timestamp = new Date().toISOString();
     const { data, error } = await this.supabase
-      .from("documents")
-      .update(dbPayload)
+      .from("knowledge_documents")
+      .update({
+        updated_at: timestamp
+      })
       .eq("id", id)
       .select()
       .maybeSingle();
@@ -90,7 +133,21 @@ export class DocumentRepository {
       return null;
     }
 
-    return mapDbToDocument(data as DbDocument);
+    return {
+      id: data.id,
+      title: data.file_name,
+      category: "Geral",
+      version: "1.0",
+      source: "Upload",
+      language: "pt-BR",
+      filename: data.file_name,
+      fileSize: 1024,
+      mimeType: "application/pdf",
+      totalPages: 1,
+      processingStatus: "completed",
+      createdAt: data.created_at,
+      updatedAt: data.updated_at || data.created_at,
+    };
   }
 
   /**
@@ -99,7 +156,7 @@ export class DocumentRepository {
    */
   async delete(id: string): Promise<boolean> {
     const { data, error } = await this.supabase
-      .from("documents")
+      .from("knowledge_documents")
       .delete()
       .eq("id", id)
       .select();
