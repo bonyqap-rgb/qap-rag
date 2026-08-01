@@ -262,6 +262,53 @@ export class ChatService {
     }
     const generationTimeMs = performance.now() - generationStartTime;
 
+    // Programmatic Interception and Refusal Override to guarantee context sufficiency
+    const responseLower = (answer || "").toLowerCase();
+    const isRefusal =
+      responseLower.includes("não encontrei") ||
+      responseLower.includes("não foram encontrados") ||
+      responseLower.includes("insuficiente") ||
+      responseLower.includes("não foi possível") ||
+      responseLower.includes("sem segurança");
+
+    if (isRefusal && finalUsedChunks.length > 0) {
+      const articleMatch = question.match(/artigo\s*(\d+)/i);
+      if (articleMatch) {
+        const articleNum = articleMatch[1];
+        const targetPattern = new RegExp(`artigo\\s*${articleNum}\\b`, "i");
+
+        const matchingChunk = finalUsedChunks.find((c) => targetPattern.test(c.text ?? ""));
+        if (matchingChunk) {
+          let cleanText = matchingChunk.text ?? "";
+          const metaMatch = cleanText.match(/^\[METADATA:[\s\S]*?\]\n([\s\S]*)$/);
+          if (metaMatch) {
+            cleanText = metaMatch[1];
+          }
+
+          logger.info(`[CHAT] Interceptada recusa do LLM para Artigo ${articleNum}. Forçando resposta transcrita.`);
+          answer = `De acordo com o documento ${docMap.get(matchingChunk.documentId) || "RDPM"}:\n\n${cleanText.trim()}`;
+        }
+      } else {
+        // Generic word overlap fallback for direct query terms
+        for (const chunk of finalUsedChunks) {
+          const chunkText = chunk.text || "";
+          const questionTerms = question.toLowerCase().split(/\s+/).filter((t) => t.length > 3);
+          const matchCount = questionTerms.filter((term) => chunkText.toLowerCase().includes(term)).length;
+
+          if (matchCount >= 2 && chunkText.toLowerCase().includes("artigo")) {
+            logger.info(`[CHAT] Interceptada recusa. Forçando transcrição por correspondência genérica de termos.`);
+            let cleanText = chunkText;
+            const metaMatch = cleanText.match(/^\[METADATA:[\s\S]*?\]\n([\s\S]*)$/);
+            if (metaMatch) {
+              cleanText = metaMatch[1];
+            }
+            answer = `De acordo com o documento ${docMap.get(chunk.documentId) || "RDPM"}:\n\n${cleanText.trim()}`;
+            break;
+          }
+        }
+      }
+    }
+
     const overallDuration = performance.now() - overallStartTime;
 
     // 8. Build Structured Sources List
