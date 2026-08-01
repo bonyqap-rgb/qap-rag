@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { DocumentService } from "../services/document.service.js";
 import { indexingHistoryService } from "../services/indexing-history.service.js";
 import { logger } from "../services/logger.service.js";
+import { env } from "../config/env.js";
 
 const router = Router();
 export const documentService = new DocumentService();
@@ -57,6 +58,57 @@ router.get("/history", async (_req: Request, res: Response, next: NextFunction) 
     const history = await indexingHistoryService.getHistory();
     return res.status(200).json(history);
   } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /documents/reindex-all
+ * Administrative endpoint to reindex all completed documents sequentially.
+ * Protected by SUPABASE_SERVICE_ROLE_KEY.
+ */
+router.post("/reindex-all", async (req: Request, res: Response, next: NextFunction) => {
+  const start = performance.now();
+  const requestId = req.headers["x-request-id"] as string;
+
+  // Protect endpoint
+  const adminKey = req.headers["x-admin-key"] || req.headers["authorization"]?.replace("Bearer ", "");
+  if (!adminKey || adminKey !== env.SUPABASE_SERVICE_ROLE_KEY) {
+    return res.status(401).json({
+      error: "UNAUTHORIZED",
+      timestamp: new Date().toISOString(),
+      message: "Acesso administrativo não autorizado. Token inválido ou ausente.",
+      route: req.originalUrl || req.url,
+      requestId
+    });
+  }
+
+  try {
+    const result = await documentService.reindexAllCompletedDocuments();
+    const duration = parseFloat((performance.now() - start).toFixed(2));
+
+    logger.info("[ADMIN] Reindexação em massa de documentos concluída com sucesso", {
+      requestId,
+      duration,
+      status: "success",
+      documentsProcessed: result.documentsProcessed,
+      chunksProcessed: result.chunksProcessed,
+    });
+
+    return res.status(200).json({
+      success: result.success,
+      documentsProcessed: result.documentsProcessed,
+      chunksProcessed: result.chunksProcessed,
+      durationMs: result.durationMs,
+      errors: result.errors
+    });
+  } catch (error) {
+    const duration = parseFloat((performance.now() - start).toFixed(2));
+    logger.error("[ADMIN] Falha crítica na reindexação em massa de documentos", error, {
+      requestId,
+      duration,
+      status: "error",
+    });
     next(error);
   }
 });
