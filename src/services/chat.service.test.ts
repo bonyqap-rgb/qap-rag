@@ -284,7 +284,7 @@ test("ChatService.chat - Balanced Multi-Document Retrieval behavior when multipl
     return originalFrom.call(supabase, table);
   };
 
-  const searchCalls: { queryText: string; topK: number; filters: any }[] = [];
+  const searchCalls: { queryText: string; topK: number | undefined; filters: any }[] = [];
 
   SearchService.search = async (queryText, topK, scoreThreshold, filters) => {
     searchCalls.push({ queryText, topK, filters });
