@@ -14,6 +14,7 @@ export interface ChatOptions {
   timeout?: number;
   model?: string;
   scoreThreshold?: number;
+  minChunksPerDocument?: number;
   filters?: {
     documentId?: string;
     category?: string;
@@ -174,12 +175,51 @@ export class ChatService {
     let searchResults = [];
     const searchStartTime = performance.now();
     try {
-      searchResults = await SearchService.search(
-        question,
-        topK,
-        scoreThreshold,
-        activeFilters
-      );
+      if (resolvedDocs.length > 1) {
+        const minChunks = options.minChunksPerDocument !== undefined
+          ? options.minChunksPerDocument
+          : env.DEFAULT_MIN_CHUNKS_PER_DOCUMENT;
+
+        const searchPromises = resolvedDocs.map(async (doc) => {
+          const docFilters = { ...options.filters, documentId: doc.documentId };
+          if ((docFilters as any).documentIds) {
+            delete (docFilters as any).documentIds;
+          }
+          return SearchService.search(
+            question,
+            minChunks,
+            scoreThreshold,
+            docFilters
+          );
+        });
+
+        const individualResults = await Promise.all(searchPromises);
+
+        // Combine all results
+        const combinedResults = individualResults.flat();
+
+        // Sort by similarity score descending first, so higher score versions of duplicates are preserved
+        combinedResults.sort((a, b) => b.score - a.score);
+
+        // Remove duplicates by text content
+        const seenTexts = new Set<string>();
+        const uniqueCombinedResults = [];
+        for (const r of combinedResults) {
+          const norm = (r?.text ?? "").trim().toLowerCase();
+          if (!seenTexts.has(norm)) {
+            seenTexts.add(norm);
+            uniqueCombinedResults.push(r);
+          }
+        }
+        searchResults = uniqueCombinedResults;
+      } else {
+        searchResults = await SearchService.search(
+          question,
+          topK,
+          scoreThreshold,
+          activeFilters
+        );
+      }
     } catch (error: any) {
       logger.error("Erro na busca vetorial do banco vetorial", error);
       const err = new Error(`Erro na busca vetorial da base de dados: ${error.message}`);
