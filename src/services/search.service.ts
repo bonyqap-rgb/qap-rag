@@ -16,6 +16,14 @@ export interface SearchResultItem {
   chunkIndex: number;
   score: number;
   text: string;
+  metadata?: {
+    sourceDocument?: string;
+    pageNumber?: number;
+    chunkIndex?: number;
+    totalChunks?: number;
+    createdAt?: string;
+    [key: string]: any;
+  };
 }
 
 export class SearchService {
@@ -169,9 +177,15 @@ export class SearchService {
 
       // Extract clean text and parse embedded metadata block
       let cleanText = item.content ?? "";
-      const metaMatch = cleanText.match(/^\[METADATA:[\s\S]*?\]\n([\s\S]*)$/);
+      let metadata: any = {};
+      const metaMatch = cleanText.match(/^\[METADATA:([\s\S]*?)\]\n([\s\S]*)$/);
       if (metaMatch) {
-        cleanText = metaMatch[1] ?? "";
+        try {
+          metadata = JSON.parse(metaMatch[1]);
+        } catch (e: any) {
+          console.error(`[SEARCH] Erro ao fazer o parse do JSON de metadados do chunk: ${e.message}`);
+        }
+        cleanText = metaMatch[2] ?? "";
       }
       cleanText = cleanText.trim();
 
@@ -193,6 +207,7 @@ export class SearchService {
           chunkIndex: item.chunk_index ?? 0,
           score,
           text: cleanText,
+          metadata,
         });
       } else {
         console.log(`    [DEDUPLICATE FILTER] Descartado por texto duplicado: "${cleanText.substring(0, 30)}..."`);

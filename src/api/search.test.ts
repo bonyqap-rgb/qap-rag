@@ -57,7 +57,8 @@ test("API POST /search - returns 200 and search results with context on success"
     assert.strictEqual(body.results[0].documentId, "doc-123");
     assert.strictEqual(body.results[0].score, 0.94);
     assert.strictEqual(body.results[0].text, "Este é o trecho recuperado.");
-    assert.strictEqual(body.context, "Este é o trecho recuperado.");
+    assert.ok(body.context.includes("Este é o trecho recuperado."));
+    assert.ok(body.context.includes("================================================"));
   } finally {
     SearchService.search = originalSearch;
   }
