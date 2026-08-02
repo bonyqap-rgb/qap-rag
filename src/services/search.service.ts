@@ -6,6 +6,7 @@ import { metricsService } from "./metrics.service.js";
 
 export interface SearchFilters {
   documentId?: string;
+  documentIds?: string[];
   category?: string;
   documentType?: string;
 }
@@ -48,6 +49,8 @@ export class SearchService {
     // Combine with specific documentId filter if provided
     if (filters?.documentId) {
       activeDocumentIdFilters = [filters.documentId];
+    } else if (filters?.documentIds && filters.documentIds.length > 0) {
+      activeDocumentIdFilters = filters.documentIds;
     }
 
     // 2. Generate embedding for query text (leverages caching and retries internally)
