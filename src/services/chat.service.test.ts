@@ -262,6 +262,118 @@ test("ChatService.resolveDocuments - resolves 'RDPM' keyword correctly", async (
   }
 });
 
+test("ChatService.chat - Balanced Multi-Document Retrieval behavior when multiple documents are matched", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  const mockDocs = [
+    { id: "doc-A", file_name: "document_A.pdf" },
+    { id: "doc-B", file_name: "document_B.pdf" }
+  ];
+
+  // Mock resolveDocuments lookup for document_A.pdf and document_B.pdf
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({ data: mockDocs, error: null }),
+          then: (resolve: any) => resolve({ data: mockDocs, error: null })
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  const searchCalls: { queryText: string; topK: number; filters: any }[] = [];
+
+  SearchService.search = async (queryText, topK, scoreThreshold, filters) => {
+    searchCalls.push({ queryText, topK, filters });
+
+    if (filters?.documentId === "doc-A") {
+      return [
+        {
+          documentId: "doc-A",
+          chunkIndex: 0,
+          score: 0.8,
+          text: "Trecho do Documento A",
+        },
+        {
+          documentId: "doc-A",
+          chunkIndex: 1,
+          score: 0.7,
+          text: "Texto Duplicado entre A e B",
+        }
+      ];
+    } else if (filters?.documentId === "doc-B") {
+      return [
+        {
+          documentId: "doc-B",
+          chunkIndex: 0,
+          score: 0.9,
+          text: "Texto Duplicado entre A e B",
+        },
+        {
+          documentId: "doc-B",
+          chunkIndex: 1,
+          score: 0.85,
+          text: "Trecho do Documento B único",
+        }
+      ];
+    }
+    return [];
+  };
+
+  setChatImplementation(async (question, context) => {
+    // Assert that the context built has both non-duplicated texts sorted by score descending
+    // Non-duplicated texts in score descending:
+    // 1. "Texto Duplicado entre A e B" (score 0.9 from doc-B)
+    // 2. "Trecho do Documento B único" (score 0.85 from doc-B)
+    // 3. "Trecho do Documento A" (score 0.8 from doc-A)
+    // "Texto Duplicado entre A e B" (score 0.7 from doc-A) is discarded as duplicate
+    assert.ok(context.includes("[Documento: document_B.pdf]\nTexto Duplicado entre A e B") || context.includes("Texto Duplicado entre A e B"));
+    assert.ok(context.includes("Trecho do Documento B único"));
+    assert.ok(context.includes("Trecho do Documento A"));
+    return "Resposta Multi-Documentos Integrada.";
+  });
+
+  try {
+    const res = await ChatService.chat("Compare document_A.pdf com document_B.pdf", {
+      minChunksPerDocument: 4,
+    });
+
+    assert.strictEqual(res.answer, "Resposta Multi-Documentos Integrada.");
+
+    // Check independent searches
+    assert.strictEqual(searchCalls.length, 2);
+    assert.deepStrictEqual(searchCalls[0].filters, { documentId: "doc-A" });
+    assert.strictEqual(searchCalls[0].topK, 4);
+    assert.deepStrictEqual(searchCalls[1].filters, { documentId: "doc-B" });
+    assert.strictEqual(searchCalls[1].topK, 4);
+
+    // Verify correct sorting and deduplication
+    // The final sources will be sorted lexicographically by documentId and then by chunkIndex:
+    // 1. doc-A chunkIndex 0 (score 0.8)
+    // 2. doc-B chunkIndex 0 (score 0.9)
+    // 3. doc-B chunkIndex 1 (score 0.85)
+    assert.strictEqual(res.sources.length, 3);
+    assert.strictEqual(res.sources[0].documentId, "doc-A");
+    assert.strictEqual(res.sources[0].chunkIndex, 0);
+    assert.strictEqual(res.sources[0].score, 0.8);
+
+    assert.strictEqual(res.sources[1].documentId, "doc-B");
+    assert.strictEqual(res.sources[1].chunkIndex, 0);
+    assert.strictEqual(res.sources[1].score, 0.9);
+
+    assert.strictEqual(res.sources[2].documentId, "doc-B");
+    assert.strictEqual(res.sources[2].chunkIndex, 1);
+    assert.strictEqual(res.sources[2].score, 0.85);
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});
+
 test("ChatService.chat - resolves multiple documents and queries them together", async () => {
   const originalSearch = SearchService.search;
   const originalFrom = supabase.from;
@@ -283,23 +395,29 @@ test("ChatService.chat - resolves multiple documents and queries them together",
     return originalFrom.call(supabase, table);
   };
 
-  let searchedFilters: any = null;
+  const capturedSearches: { query: string; filters: any }[] = [];
   SearchService.search = async (query, topK, score, filters) => {
-    searchedFilters = filters;
-    return [
-      {
-        documentId: "rdpm-uuid-999",
-        chunkIndex: 0,
-        score: 0.92,
-        text: "Trecho do RDPM",
-      },
-      {
-        documentId: "i2pm-uuid-888",
-        chunkIndex: 1,
-        score: 0.88,
-        text: "Trecho do I-2-PM",
-      }
-    ];
+    capturedSearches.push({ query, filters });
+    if (filters?.documentId === "rdpm-uuid-999") {
+      return [
+        {
+          documentId: "rdpm-uuid-999",
+          chunkIndex: 0,
+          score: 0.92,
+          text: "Trecho do RDPM",
+        }
+      ];
+    } else if (filters?.documentId === "i2pm-uuid-888") {
+      return [
+        {
+          documentId: "i2pm-uuid-888",
+          chunkIndex: 1,
+          score: 0.88,
+          text: "Trecho do I-2-PM",
+        }
+      ];
+    }
+    return [];
   };
 
   setChatImplementation(async () => {
@@ -309,9 +427,14 @@ test("ChatService.chat - resolves multiple documents and queries them together",
   try {
     const res = await ChatService.chat("Compare o Artigo 31 do RDPM com o Artigo 31 da I-2-PM");
     assert.strictEqual(res.answer, "Resposta comparativa simulada.");
-    assert.ok(searchedFilters);
-    assert.deepStrictEqual(searchedFilters.documentIds, ["rdpm-uuid-999", "i2pm-uuid-888"]);
+
+    // Assert 2 independent queries are executed
+    assert.strictEqual(capturedSearches.length, 2);
+    assert.strictEqual(capturedSearches[0].filters.documentId, "rdpm-uuid-999");
+    assert.strictEqual(capturedSearches[1].filters.documentId, "i2pm-uuid-888");
+
     assert.strictEqual(res.sources.length, 2);
+    // Sorted alphabetically by documentId: i2pm-uuid-888 comes before rdpm-uuid-999
     assert.strictEqual(res.sources[0].documentId, "i2pm-uuid-888");
     assert.strictEqual(res.sources[1].documentId, "rdpm-uuid-999");
   } finally {

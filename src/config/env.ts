@@ -14,6 +14,7 @@ interface EnvVariables {
   DEFAULT_TOP_K: number;
   DEFAULT_MIN_SCORE: number;
   DEFAULT_MAX_CONTEXT_SIZE: number;
+  DEFAULT_MIN_CHUNKS_PER_DOCUMENT: number;
 
   // Cache settings
   EMBEDDING_CACHE_TTL: number; // in seconds
@@ -73,6 +74,7 @@ function validateEnv(): EnvVariables {
     DEFAULT_TOP_K: process.env.DEFAULT_TOP_K ? parseInt(process.env.DEFAULT_TOP_K, 10) : 5,
     DEFAULT_MIN_SCORE: process.env.DEFAULT_MIN_SCORE ? parseFloat(process.env.DEFAULT_MIN_SCORE) : 0.3,
     DEFAULT_MAX_CONTEXT_SIZE: process.env.DEFAULT_MAX_CONTEXT_SIZE ? parseInt(process.env.DEFAULT_MAX_CONTEXT_SIZE, 10) : 4000,
+    DEFAULT_MIN_CHUNKS_PER_DOCUMENT: process.env.MIN_CHUNKS_PER_DOCUMENT ? parseInt(process.env.MIN_CHUNKS_PER_DOCUMENT, 10) : 3,
 
     // Cache defaults: TTL 1 day (86400s), max size 1000
     EMBEDDING_CACHE_TTL: process.env.EMBEDDING_CACHE_TTL ? parseInt(process.env.EMBEDDING_CACHE_TTL, 10) : 86400,
