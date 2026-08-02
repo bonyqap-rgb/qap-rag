@@ -292,51 +292,14 @@ export class ChatService {
       }
     }
 
-    // 5. Track exact chunks utilized inside the context building constraint
-    const seenTexts = new Set<string>();
-    const uniqueChunks = [];
-    for (const r of searchResults) {
-      const norm = (r?.text ?? "").trim().toLowerCase();
-      if (!seenTexts.has(norm)) {
-        seenTexts.add(norm);
-        uniqueChunks.push(r);
-      }
-    }
-    uniqueChunks.sort((a, b) => {
-      const docA = a?.documentId ?? "";
-      const docB = b?.documentId ?? "";
-      if (docA !== docB) {
-        return docA.localeCompare(docB);
-      }
-      const indexA = a?.chunkIndex ?? 0;
-      const indexB = b?.chunkIndex ?? 0;
-      return indexA - indexB;
-    });
+    // 5. Prepare and enrich chunk metadata before passing to ContextBuilder
+    const chunksToProcess = searchResults.map(r => ({
+      ...r,
+      documentName: docMap.get(r.documentId) || r.metadata?.sourceDocument || "Desconhecido",
+    }));
 
-    const finalUsedChunks = [];
-    let currentContextText = "";
-    for (const chunk of uniqueChunks) {
-      const chunkText = (chunk?.text ?? "").trim();
-      if (!chunkText) continue;
-
-      if (currentContextText === "") {
-        if (chunkText.length > maxContextSize) {
-          currentContextText = chunkText.substring(0, maxContextSize);
-          finalUsedChunks.push(chunk);
-        } else {
-          currentContextText = chunkText;
-          finalUsedChunks.push(chunk);
-        }
-      } else {
-        const potentialNext = currentContextText + "\n\n" + chunkText;
-        if (potentialNext.length <= maxContextSize) {
-          currentContextText = potentialNext;
-          finalUsedChunks.push(chunk);
-        } else {
-          break;
-        }
-      }
-    }
+    // 6. Build Context and Prompts via detailed builder to track exactly used chunks
+    const { context, selectedChunks: finalUsedChunks } = ContextBuilderService.buildContextDetailed(chunksToProcess, maxContextSize);
 
     // Second Check: No valid chunk retrieved/utilized
     if (finalUsedChunks.length === 0) {
@@ -370,8 +333,6 @@ export class ChatService {
       };
     }
 
-    // 6. Build Context and Prompts
-    const context = ContextBuilderService.buildContext(searchResults, maxContextSize);
     const systemPrompt = PromptBuilderService.buildSystemPrompt();
     const userPrompt = PromptBuilderService.buildUserPrompt(question, context);
 
@@ -404,9 +365,9 @@ export class ChatService {
     // 8. Build Structured Sources List
     const sources: ChatSource[] = finalUsedChunks.map((c) => ({
       documentId: c.documentId,
-      filename: docMap.get(c.documentId) || "Desconhecido",
+      filename: docMap.get(c.documentId) || c.documentName || "Desconhecido",
       chunkIndex: c.chunkIndex,
-      score: parseFloat(c.score.toFixed(4)),
+      score: c.score !== undefined ? parseFloat(c.score.toFixed(4)) : 0,
     }));
 
     // 9. Structured Logging of metrics

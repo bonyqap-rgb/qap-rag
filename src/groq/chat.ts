@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import Groq from "groq-sdk";
 import { env } from "../config/env.js";
 import { groqChatCircuitBreaker } from "../services/circuit-breaker.service.js";
+import { PromptBuilderService } from "../services/prompt-builder.service.js";
 
 dotenv.config();
 
@@ -73,14 +74,7 @@ async function defaultChatImplementation(
     throw new Error("A pergunta não pode ser vazia.");
   }
 
-  const systemPrompt = options.systemPrompt || `Você é um especialista da Polícia Militar do Estado de São Paulo.
-
-Responda a pergunta do usuário baseando-se EXCLUSIVAMENTE no CONTEXTO fornecido abaixo.
-
-Se a resposta não puder ser encontrada no contexto fornecido, responda exatamente e sem explicações adicionais:
-"Não encontrei essa informação na base de conhecimento."
-
-Ao responder, faça referências explícitas às fontes do contexto utilizadas (por exemplo: "[doc: documento.pdf, pág: 3]").`;
+  const systemPrompt = options.systemPrompt || PromptBuilderService.buildSystemPrompt();
 
   const userPrompt = options.userPrompt || `CONTEXTO DE SUPORTE:
 ${context || "Nenhum contexto encontrado."}
