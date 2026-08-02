@@ -41,17 +41,19 @@ export interface ChatResponse {
 export class ChatService {
   /**
    * Resolves document scope based on keywords inside the question or filters.
-   * If the question contains "RDPM" (case-insensitive), it queries `knowledge_documents`
-   * and maps it to the document whose filename contains "rdpm" (case-insensitive).
+   * Scans and returns all matching documents found in the question.
    *
    * @param question - The user's question.
    * @param filters - Optional pre-existing filters.
-   * @returns Resolved document information or null.
+   * @returns List of resolved documents.
    */
   static async resolveDocuments(
     question: string,
     filters?: { documentId?: string; [key: string]: any }
-  ): Promise<{ documentId: string; filename: string } | null> {
+  ): Promise<{ documentId: string; filename: string }[]> {
+    const resolvedDocs: { documentId: string; filename: string }[] = [];
+    const seenIds = new Set<string>();
+
     // 1. If a documentId is already present in filters, try to fetch its details to confirm/resolve
     if (filters?.documentId) {
       try {
@@ -62,7 +64,8 @@ export class ChatService {
           .maybeSingle();
 
         if (!error && doc) {
-          return { documentId: doc.id, filename: doc.file_name };
+          resolvedDocs.push({ documentId: doc.id, filename: doc.file_name });
+          seenIds.add(doc.id);
         }
       } catch (err) {
         logger.error("Erro ao validar documentId existente em resolveDocuments", err);
@@ -71,25 +74,7 @@ export class ChatService {
 
     const lowerQuestion = question.toLowerCase();
 
-    // 2. Specific check for RDPM keyword
-    if (lowerQuestion.includes("rdpm")) {
-      try {
-        const { data: docs, error } = await supabase
-          .from("knowledge_documents")
-          .select("id, file_name");
-
-        if (!error && docs) {
-          const matched = docs.find((d) => d.file_name.toLowerCase().includes("rdpm"));
-          if (matched) {
-            return { documentId: matched.id, filename: matched.file_name };
-          }
-        }
-      } catch (err) {
-        logger.error("Erro ao carregar documentos para resolver 'RDPM'", err);
-      }
-    }
-
-    // 3. Generic check for any other document filename mentioned in the question
+    // 2. Fetch all documents to perform matching
     try {
       const { data: docs, error } = await supabase
         .from("knowledge_documents")
@@ -97,18 +82,35 @@ export class ChatService {
 
       if (!error && docs) {
         for (const doc of docs) {
-          // Remove extension to match the core name
+          if (seenIds.has(doc.id)) continue;
+
           const cleanName = doc.file_name.toLowerCase().replace(/\.[^/.]+$/, "");
+          let isMatch = false;
+
           if (cleanName && lowerQuestion.includes(cleanName)) {
-            return { documentId: doc.id, filename: doc.file_name };
+            isMatch = true;
+          } else {
+            // Also check for components of the filename
+            const parts = cleanName.split(/[_\s]+/);
+            for (const part of parts) {
+              if (part.length >= 3 && lowerQuestion.includes(part)) {
+                isMatch = true;
+                break;
+              }
+            }
+          }
+
+          if (isMatch) {
+            resolvedDocs.push({ documentId: doc.id, filename: doc.file_name });
+            seenIds.add(doc.id);
           }
         }
       }
     } catch (err) {
-      logger.error("Erro na busca de documentos para resolução genérica", err);
+      logger.error("Erro na busca de documentos para resolução de múltiplos documentos", err);
     }
 
-    return null;
+    return resolvedDocs;
   }
 
   /**
@@ -145,29 +147,70 @@ export class ChatService {
     }
 
     // A. Resolve document scope from the question or filters
-    const resolvedDoc = await ChatService.resolveDocuments(question, options.filters);
-    const activeFilters = { ...options.filters };
+    const resolvedDocs = await ChatService.resolveDocuments(question, options.filters);
+    const activeFilters: any = { ...options.filters };
 
-    if (resolvedDoc) {
-      activeFilters.documentId = resolvedDoc.documentId;
+    if (resolvedDocs.length === 1) {
+      activeFilters.documentId = resolvedDocs[0].documentId;
+    } else if (resolvedDocs.length > 1) {
+      activeFilters.documentIds = resolvedDocs.map(d => d.documentId);
+      delete activeFilters.documentId;
     }
+
+    const resolvedDocNames = resolvedDocs.length > 0
+      ? (resolvedDocs.length === 1 ? resolvedDocs[0].filename : resolvedDocs.map(d => d.filename).join(", "))
+      : null;
+    const resolvedDocIds = resolvedDocs.length > 0
+      ? (resolvedDocs.length === 1 ? resolvedDocs[0].documentId : resolvedDocs.map(d => d.documentId).join(", "))
+      : null;
 
     // Log the resolved document details as requested
     logger.info("Documento resolvido para busca", {
-      "documento resolvido": resolvedDoc ? resolvedDoc.filename : null,
-      "document_id": resolvedDoc ? resolvedDoc.documentId : null
+      "documento resolvido": resolvedDocNames,
+      "document_id": resolvedDocIds
     });
 
     // 2. Perform Semantic Search
     let searchResults = [];
     const searchStartTime = performance.now();
     try {
-      searchResults = await SearchService.search(
-        question,
-        topK,
-        scoreThreshold,
-        activeFilters
-      );
+      if (resolvedDocs.length > 1) {
+        // Balanced Multi-Document Retrieval
+        const limitPerDoc = Math.max(3, topK);
+        const searchPromises = resolvedDocs.map(async (doc) => {
+          const docFilters = { ...options.filters, documentId: doc.documentId };
+          return SearchService.search(
+            question,
+            limitPerDoc,
+            scoreThreshold,
+            docFilters
+          );
+        });
+
+        const allResults = await Promise.all(searchPromises);
+        const flatResults = allResults.flat();
+
+        // Deduplicate chunks by normalized text content
+        const seenTexts = new Set<string>();
+        for (const item of flatResults) {
+          const norm = (item.text ?? "").trim().toLowerCase();
+          if (!seenTexts.has(norm)) {
+            seenTexts.add(norm);
+            searchResults.push(item);
+          }
+        }
+
+        // Sort combined results by relevance (score descending)
+        searchResults.sort((a, b) => b.score - a.score);
+      } else {
+        // Standard Single-Document or No-Document search
+        searchResults = await SearchService.search(
+          question,
+          topK,
+          scoreThreshold,
+          activeFilters
+        );
+      }
     } catch (error: any) {
       logger.error("Erro na busca vetorial do banco vetorial", error);
       const err = new Error(`Erro na busca vetorial da base de dados: ${error.message}`);
@@ -190,8 +233,8 @@ export class ChatService {
 
       // Log motivo exato da insuficiência quando ocorrer
       logger.info("Insuficiência de contexto detectada", {
-        "documento resolvido": resolvedDoc ? resolvedDoc.filename : null,
-        "document_id": resolvedDoc ? resolvedDoc.documentId : null,
+        "documento resolvido": resolvedDocNames,
+        "document_id": resolvedDocIds,
         resultsCount,
         "motivo exato da insuficiência": motivoInsuficiencia
       });
@@ -293,8 +336,8 @@ export class ChatService {
 
       // Log motivo exato da insuficiência quando ocorrer
       logger.info("Insuficiência de contexto detectada", {
-        "documento resolvido": resolvedDoc ? resolvedDoc.filename : null,
-        "document_id": resolvedDoc ? resolvedDoc.documentId : null,
+        "documento resolvido": resolvedDocNames,
+        "document_id": resolvedDocIds,
         resultsCount,
         "motivo exato da insuficiência": motivoInsuficiencia
       });

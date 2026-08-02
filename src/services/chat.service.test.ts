@@ -69,6 +69,57 @@ test("ChatService.chat - full flow with context found", async () => {
   }
 });
 
+test("ChatService.chat - Balanced Multi-Document Retrieval enforces a minimum chunk limit per document", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  const mockDocs = [
+    { id: "rdpm-uuid-999", file_name: "RDPM_regulamento.pdf" },
+    { id: "i2pm-uuid-888", file_name: "I-2-PM.pdf" }
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({ data: mockDocs, error: null }),
+          then: (resolve: any) => resolve({ data: mockDocs, error: null })
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  let searchedTopK: number | null = null;
+  SearchService.search = async (query, topK, score, filters) => {
+    searchedTopK = topK;
+    return [
+      {
+        documentId: "rdpm-uuid-999",
+        chunkIndex: 0,
+        score: 0.92,
+        text: "Trecho do RDPM",
+      }
+    ];
+  };
+
+  setChatImplementation(async () => {
+    return "Resposta.";
+  });
+
+  try {
+    // topK is explicitly 2, but Balanced Retrieval should enforce Math.max(3, topK) which is 3
+    const res = await ChatService.chat("Compare o Artigo 31 do RDPM com o Artigo 31 da I-2-PM", {
+      topK: 2
+    });
+    assert.strictEqual(searchedTopK, 3);
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});
+
 test("ChatService.chat - context empty scenario", async () => {
   const originalSearch = SearchService.search;
   SearchService.search = async () => []; // No chunks found
@@ -254,10 +305,76 @@ test("ChatService.resolveDocuments - resolves 'RDPM' keyword correctly", async (
   try {
     const res = await ChatService.resolveDocuments("Qual o Artigo 31 do RDPM?");
     assert.ok(res);
-    assert.strictEqual(res.documentId, "rdpm-uuid-999");
-    assert.strictEqual(res.filename, "RDPM_regulamento.pdf");
+    assert.strictEqual(res.length, 1);
+    assert.strictEqual(res[0].documentId, "rdpm-uuid-999");
+    assert.strictEqual(res[0].filename, "RDPM_regulamento.pdf");
   } finally {
     supabase.from = originalFrom;
+  }
+});
+
+test("ChatService.chat - resolves multiple documents and queries them together", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  const mockDocs = [
+    { id: "rdpm-uuid-999", file_name: "RDPM_regulamento.pdf" },
+    { id: "i2pm-uuid-888", file_name: "I-2-PM.pdf" }
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({ data: mockDocs, error: null }),
+          then: (resolve: any) => resolve({ data: mockDocs, error: null })
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  const executedSearches: any[] = [];
+  SearchService.search = async (query, topK, score, filters) => {
+    executedSearches.push(filters);
+    if (filters?.documentId === "rdpm-uuid-999") {
+      return [
+        {
+          documentId: "rdpm-uuid-999",
+          chunkIndex: 0,
+          score: 0.92,
+          text: "Trecho do RDPM",
+        }
+      ];
+    } else {
+      return [
+        {
+          documentId: "i2pm-uuid-888",
+          chunkIndex: 1,
+          score: 0.88,
+          text: "Trecho do I-2-PM",
+        }
+      ];
+    }
+  };
+
+  setChatImplementation(async () => {
+    return "Resposta comparativa simulada.";
+  });
+
+  try {
+    const res = await ChatService.chat("Compare o Artigo 31 do RDPM com o Artigo 31 da I-2-PM");
+    assert.strictEqual(res.answer, "Resposta comparativa simulada.");
+    assert.strictEqual(executedSearches.length, 2);
+    const docIdsSearched = executedSearches.map(s => s.documentId).sort();
+    assert.deepStrictEqual(docIdsSearched, ["i2pm-uuid-888", "rdpm-uuid-999"]);
+    assert.strictEqual(res.sources.length, 2);
+    assert.strictEqual(res.sources[0].documentId, "i2pm-uuid-888");
+    assert.strictEqual(res.sources[1].documentId, "rdpm-uuid-999");
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
   }
 });
 
