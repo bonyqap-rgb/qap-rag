@@ -61,16 +61,23 @@ function validateEnv(): EnvVariables {
     process.exit(1);
   }
 
+  const supabaseUrl = (process.env.SUPABASE_URL || "").trim();
+  const supabaseServiceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+  const groqApiKey = (process.env.GROQ_API_KEY || "").trim();
+  const voyageApiKey = process.env.VOYAGE_API_KEY ? process.env.VOYAGE_API_KEY.trim() : undefined;
+  const nomicApiKey = process.env.NOMIC_API_KEY ? process.env.NOMIC_API_KEY.trim() : undefined;
+  const groqChatModel = process.env.GROQ_CHAT_MODEL ? process.env.GROQ_CHAT_MODEL.trim() : "llama-3.3-70b-versatile";
+
   return {
-    SUPABASE_URL: process.env.SUPABASE_URL!,
-    SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    GROQ_API_KEY: process.env.GROQ_API_KEY!,
+    SUPABASE_URL: supabaseUrl,
+    SUPABASE_SERVICE_ROLE_KEY: supabaseServiceRoleKey,
+    GROQ_API_KEY: groqApiKey,
     NODE_ENV: process.env.NODE_ENV || "development",
     PORT: process.env.PORT ? parseInt(process.env.PORT, 10) : 3001,
     ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS
       ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
       : ["https://qap-ia.lovable.app", "https://hoppscotch.io"],
-    DEFAULT_CHAT_MODEL: process.env.GROQ_CHAT_MODEL || "llama-3.3-70b-versatile",
+    DEFAULT_CHAT_MODEL: groqChatModel,
     DEFAULT_TOP_K: process.env.DEFAULT_TOP_K ? parseInt(process.env.DEFAULT_TOP_K, 10) : 5,
     DEFAULT_MIN_SCORE: process.env.DEFAULT_MIN_SCORE ? parseFloat(process.env.DEFAULT_MIN_SCORE) : 0.3,
     DEFAULT_MAX_CONTEXT_SIZE: process.env.DEFAULT_MAX_CONTEXT_SIZE ? parseInt(process.env.DEFAULT_MAX_CONTEXT_SIZE, 10) : 4000,
@@ -96,8 +103,8 @@ function validateEnv(): EnvVariables {
     RATE_LIMIT_MAX_INDEX: process.env.RATE_LIMIT_MAX_INDEX ? parseInt(process.env.RATE_LIMIT_MAX_INDEX, 10) : 20,
 
     // Embeddings API Keys
-    VOYAGE_API_KEY: process.env.VOYAGE_API_KEY,
-    NOMIC_API_KEY: process.env.NOMIC_API_KEY,
+    VOYAGE_API_KEY: voyageApiKey,
+    NOMIC_API_KEY: nomicApiKey,
   };
 }
 

@@ -65,7 +65,7 @@ export class ChatService {
           .maybeSingle();
 
         if (!error && doc) {
-          resolvedDocs.push({ documentId: doc.id, filename: doc.file_name });
+          resolvedDocs.push({ documentId: doc.id, filename: doc.file_name ?? "Desconhecido" });
           seenIds.add(doc.id);
         }
       } catch (err) {
@@ -85,7 +85,10 @@ export class ChatService {
         for (const doc of docs) {
           if (seenIds.has(doc.id)) continue;
 
-          const cleanName = doc.file_name.toLowerCase().replace(/\.[^/.]+$/, "");
+          const fileName = doc.file_name ?? "";
+          if (!fileName) continue;
+
+          const cleanName = fileName.toLowerCase().replace(/\.[^/.]+$/, "");
           let isMatch = false;
 
           if (cleanName && lowerQuestion.includes(cleanName)) {
@@ -102,7 +105,7 @@ export class ChatService {
           }
 
           if (isMatch) {
-            resolvedDocs.push({ documentId: doc.id, filename: doc.file_name });
+            resolvedDocs.push({ documentId: doc.id, filename: fileName });
             seenIds.add(doc.id);
           }
         }
@@ -348,14 +351,25 @@ export class ChatService {
         userPrompt,
       });
     } catch (error: any) {
-      logger.error("Falha ao invocar LLM no ChatService", error);
-      const isTimeout = error.message && error.message.includes("tempo limite");
+      logger.error("Falha ao invocar LLM no ChatService", error, {
+        question,
+        contextSize: context ? context.length : 0,
+        model,
+        temperature,
+        timeout,
+      });
+      const isTimeout = error.message && (
+        error.message.includes("tempo limite") ||
+        error.message.toLowerCase().includes("timeout") ||
+        error.message.toLowerCase().includes("timed out")
+      );
       const err = new Error(
         isTimeout
           ? `O tempo limite de processamento de ${timeout}ms foi excedido.`
           : `Falha ao gerar resposta do Groq: ${error.message}`
       );
       (err as any).status = isTimeout ? 504 : 502;
+      (err as any).originalError = error;
       throw err;
     }
     const generationTimeMs = performance.now() - generationStartTime;

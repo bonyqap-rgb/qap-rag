@@ -176,3 +176,12 @@ function handleGracefulShutdown(signal: string) {
 
 process.on("SIGINT", () => handleGracefulShutdown("SIGINT"));
 process.on("SIGTERM", () => handleGracefulShutdown("SIGTERM"));
+
+process.on("unhandledRejection", (reason) => {
+  logger.error("[FATAL] Unhandled Rejection detected at process level", reason instanceof Error ? reason : new Error(String(reason)));
+});
+
+process.on("uncaughtException", (error) => {
+  logger.error("[FATAL] Uncaught Exception thrown at process level", error);
+  handleGracefulShutdown("UNCAUGHT_EXCEPTION");
+});

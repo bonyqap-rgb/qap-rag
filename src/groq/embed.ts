@@ -6,7 +6,7 @@ import { groqEmbeddingCircuitBreaker } from "../services/circuit-breaker.service
 
 dotenv.config();
 
-const groq = new Groq({
+export const groq = new Groq({
   apiKey: env.GROQ_API_KEY,
 });
 
@@ -138,8 +138,20 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
           }
           console.log(`[NOMIC] dimensão original recebida da API: ${embedding.length}`);
           return embedding;
+        } else if (env.GROQ_API_KEY) {
+          // Generate embeddings using Groq SDK nomic-embed-text-v1_5 model as fallback/primary
+          const response = await groq.embeddings.create({
+            model: process.env.GROQ_EMBED_MODEL || "nomic-embed-text-v1_5",
+            input: normalizedText,
+          });
+          const embedding = response.data?.[0]?.embedding;
+          if (!embedding) {
+            throw new Error("Resposta da API de embedding do Groq inválida ou vazia.");
+          }
+          console.log(`[GROQ] dimensão original recebida da API: ${embedding.length}`);
+          return embedding;
         } else {
-          throw new Error("Provedor de embedding não configurado. Defina VOYAGE_API_KEY ou NOMIC_API_KEY no arquivo .env.");
+          throw new Error("Provedor de embedding não configurado. Defina VOYAGE_API_KEY, NOMIC_API_KEY ou GROQ_API_KEY no arquivo .env.");
         }
       })(),
       env.LLM_TIMEOUT
