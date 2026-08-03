@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { env } from "../config/env.js";
-import { createEmbedding, resetEmbeddingImplementation } from "./embed.js";
+import { createEmbedding, resetEmbeddingImplementation, setEmbeddingImplementation, groq } from "./embed.js";
 
 test("Embedding Service - Voyage AI success and 1536 padding", async () => {
   // Store original environment variables
@@ -53,6 +53,50 @@ test("Embedding Service - Voyage AI success and 1536 padding", async () => {
     env.VOYAGE_API_KEY = originalVoyageKey;
     env.NOMIC_API_KEY = originalNomicKey;
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("Embedding Service - Groq SDK success and 1536 padding", async () => {
+  const originalVoyageKey = env.VOYAGE_API_KEY;
+  const originalNomicKey = env.NOMIC_API_KEY;
+  const originalGroqKey = env.GROQ_API_KEY;
+
+  env.VOYAGE_API_KEY = undefined;
+  env.NOMIC_API_KEY = undefined;
+  env.GROQ_API_KEY = "mock_groq_key";
+
+  // Mock groq.embeddings.create
+  const originalCreate = groq.embeddings.create;
+  (groq.embeddings as any).create = async () => {
+    return {
+      data: [
+        {
+          embedding: Array(768).fill(0.7),
+          index: 0,
+          object: "embedding",
+        }
+      ],
+      model: "nomic-embed-text-v1_5",
+      object: "list",
+      usage: { prompt_tokens: 10, total_tokens: 10 },
+    } as any;
+  };
+
+  try {
+    resetEmbeddingImplementation();
+    const result = await createEmbedding("test groq text");
+
+    assert.strictEqual(result.length, 1536);
+    assert.strictEqual(result[0], 0.7);
+    assert.strictEqual(result[767], 0.7);
+    assert.strictEqual(result[768], 0);
+    assert.strictEqual(result[1535], 0);
+  } finally {
+    env.VOYAGE_API_KEY = originalVoyageKey;
+    env.NOMIC_API_KEY = originalNomicKey;
+    env.GROQ_API_KEY = originalGroqKey;
+    (groq.embeddings as any).create = originalCreate;
+    resetEmbeddingImplementation();
   }
 });
 
