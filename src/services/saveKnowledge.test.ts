@@ -3,49 +3,84 @@ import assert from "node:assert";
 import { supabase } from "../config/supabase.js";
 import { saveKnowledge } from "./saveKnowledge.js";
 
-test("saveKnowledge - valid document", async () => {
-  const originalFrom = supabase.from;
-  let savedStatus = "";
-  let insertedRows: any[] = [];
-
-  supabase.from = function (table: string) {
-    const builder = {
-      insert: (payload: any) => {
-        if (table === "knowledge_documents") {
+// Helper helper function to create a mock supabase.from implementation
+function createMockSupabase(options: {
+  existingDoc?: any;
+  insertedDoc?: any;
+  updatedDoc?: any;
+  insertedChunks?: any[];
+  countChunksResult?: number;
+} = {}) {
+  return function (table: string): any {
+    const builder: any = {
+      select: (selectField: any, selectOpts: any) => {
+        if (selectOpts && selectOpts.count === "exact") {
           return {
-            select: () => ({
-              single: () => Promise.resolve({ data: { id: "mock-doc-id", file_name: "valid.pdf" }, error: null })
-            })
+            eq: () => Promise.resolve({ count: options.countChunksResult ?? 2, error: null })
           };
         }
+        return {
+          eq: (field: string, val: any) => {
+            return {
+              maybeSingle: () => Promise.resolve({ data: options.existingDoc ?? null, error: null })
+            };
+          },
+          maybeSingle: () => Promise.resolve({ data: options.existingDoc ?? null, error: null })
+        };
+      },
+      insert: (payload: any) => {
         if (table === "knowledge_chunks") {
-          insertedRows = payload;
+          if (options.insertedChunks) {
+            options.insertedChunks.push(...(Array.isArray(payload) ? payload : [payload]));
+          }
           return Promise.resolve({ error: null });
         }
-        return builder;
-      },
-      delete: () => {
-        return builder;
-      },
-      eq: () => {
-        return builder;
-      },
-      select: () => {
         return {
-          eq: () => Promise.resolve({ data: null, count: 2, error: null }) // mock written count is 2 (matches rawChunks.length)
+          select: () => ({
+            single: () => Promise.resolve({ data: options.insertedDoc ?? { id: "mock-doc-id", file_name: "valid.pdf" }, error: null })
+          })
         };
       },
       update: (payload: any) => {
-        if (table === "knowledge_documents" && payload.status) {
-          savedStatus = payload.status;
+        if (options.updatedDoc) {
+          options.updatedDoc.payload = payload;
         }
+        return {
+          eq: () => {
+            const res = {
+              select: () => ({
+                single: () => Promise.resolve({ data: options.insertedDoc ?? { id: "mock-doc-id", file_name: "valid.pdf" }, error: null })
+              }),
+              then: (cb: any) => Promise.resolve({ error: null }).then(cb)
+            };
+            return res as any;
+          }
+        };
+      },
+      delete: () => {
         return {
           eq: () => Promise.resolve({ error: null })
         };
+      },
+      eq: () => {
+        return builder;
       }
     };
-    return builder as any;
+    return builder;
   };
+}
+
+test("saveKnowledge - valid document", async () => {
+  const originalFrom = supabase.from;
+  const updatedDoc = { payload: null as any };
+  const insertedChunks: any[] = [];
+
+  supabase.from = createMockSupabase({
+    insertedDoc: { id: "mock-doc-id", file_name: "valid.pdf" },
+    updatedDoc,
+    insertedChunks,
+    countChunksResult: 2
+  });
 
   try {
     const rawChunks = ["[PAGE:1] Primeiro chunk", "[PAGE:2] Segundo chunk"];
@@ -57,8 +92,8 @@ test("saveKnowledge - valid document", async () => {
     const docId = await saveKnowledge("valid.pdf", rawChunks, embeddings);
 
     assert.strictEqual(docId, "mock-doc-id");
-    assert.strictEqual(savedStatus, "INDEXADO");
-    assert.strictEqual(insertedRows.length, 2);
+    assert.strictEqual(updatedDoc.payload?.status, "INDEXADO");
+    assert.strictEqual(insertedChunks.length, 2);
   } finally {
     supabase.from = originalFrom;
   }
@@ -66,31 +101,13 @@ test("saveKnowledge - valid document", async () => {
 
 test("saveKnowledge - document with no text (empty chunks)", async () => {
   const originalFrom = supabase.from;
-  let savedStatus = "";
+  const updatedDoc = { payload: null as any };
 
-  supabase.from = function (table: string) {
-    const builder = {
-      insert: () => {
-        if (table === "knowledge_documents") {
-          return {
-            select: () => ({
-              single: () => Promise.resolve({ data: { id: "mock-doc-id", file_name: "empty.pdf" }, error: null })
-            })
-          };
-        }
-        return builder;
-      },
-      update: (payload: any) => {
-        if (table === "knowledge_documents" && payload.status) {
-          savedStatus = payload.status;
-        }
-        return {
-          eq: () => Promise.resolve({ error: null })
-        };
-      }
-    };
-    return builder as any;
-  };
+  supabase.from = createMockSupabase({
+    insertedDoc: { id: "mock-doc-id", file_name: "empty.pdf" },
+    updatedDoc,
+    countChunksResult: 0
+  });
 
   try {
     await assert.rejects(
@@ -99,7 +116,7 @@ test("saveKnowledge - document with no text (empty chunks)", async () => {
       },
       (err: Error) => {
         assert.ok(err.message.includes("INDEXAÇÃO_INVÁLIDA"));
-        assert.strictEqual(savedStatus, "INDEXAÇÃO_INVÁLIDA");
+        assert.strictEqual(updatedDoc.payload?.status, "INDEXAÇÃO_INVÁLIDA");
         return true;
       }
     );
@@ -110,31 +127,13 @@ test("saveKnowledge - document with no text (empty chunks)", async () => {
 
 test("saveKnowledge - document with zero chunks", async () => {
   const originalFrom = supabase.from;
-  let savedStatus = "";
+  const updatedDoc = { payload: null as any };
 
-  supabase.from = function (table: string) {
-    const builder = {
-      insert: () => {
-        if (table === "knowledge_documents") {
-          return {
-            select: () => ({
-              single: () => Promise.resolve({ data: { id: "mock-doc-id", file_name: "zero.pdf" }, error: null })
-            })
-          };
-        }
-        return builder;
-      },
-      update: (payload: any) => {
-        if (table === "knowledge_documents" && payload.status) {
-          savedStatus = payload.status;
-        }
-        return {
-          eq: () => Promise.resolve({ error: null })
-        };
-      }
-    };
-    return builder as any;
-  };
+  supabase.from = createMockSupabase({
+    insertedDoc: { id: "mock-doc-id", file_name: "zero.pdf" },
+    updatedDoc,
+    countChunksResult: 0
+  });
 
   try {
     await assert.rejects(
@@ -143,10 +142,42 @@ test("saveKnowledge - document with zero chunks", async () => {
       },
       (err: Error) => {
         assert.ok(err.message.includes("INDEXAÇÃO_INVÁLIDA"));
-        assert.strictEqual(savedStatus, "INDEXAÇÃO_INVÁLIDA");
+        assert.strictEqual(updatedDoc.payload?.status, "INDEXAÇÃO_INVÁLIDA");
         return true;
       }
     );
+  } finally {
+    supabase.from = originalFrom;
+  }
+});
+
+test("saveKnowledge - safe reindexing on existing INDEXAÇÃO_INVÁLIDA document", async () => {
+  const originalFrom = supabase.from;
+  const updatedDoc = { payload: null as any };
+  const insertedChunks: any[] = [];
+
+  // Mocking that an existing doc was found with status INDEXAÇÃO_INVÁLIDA
+  supabase.from = createMockSupabase({
+    existingDoc: { id: "existing-uuid-123", status: "INDEXAÇÃO_INVÁLIDA" },
+    insertedDoc: { id: "existing-uuid-123", file_name: "invalid_to_valid.pdf" },
+    updatedDoc,
+    insertedChunks,
+    countChunksResult: 2
+  });
+
+  try {
+    const rawChunks = ["[PAGE:1] Primeiro chunk do PDF", "[PAGE:2] Segundo chunk do PDF"];
+    const embeddings = [
+      Array(1536).fill(0.3),
+      Array(1536).fill(0.4)
+    ];
+
+    const docId = await saveKnowledge("invalid_to_valid.pdf", rawChunks, embeddings);
+
+    assert.strictEqual(docId, "existing-uuid-123");
+    // Verify that the status updated to INDEXADO after safe reindexing
+    assert.strictEqual(updatedDoc.payload?.status, "INDEXADO");
+    assert.strictEqual(insertedChunks.length, 2);
   } finally {
     supabase.from = originalFrom;
   }

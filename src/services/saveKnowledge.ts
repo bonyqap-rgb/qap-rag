@@ -51,24 +51,64 @@ export async function saveKnowledge(
   let persisted = "NÃO";
   let finalStatus = "INDEXAÇÃO_INVÁLIDA";
 
-  // 1. Insert the document metadata row with retries in PROCESSANDO status
-  const docInsertCall = async () => {
-    const { data: document, error: documentError } = await supabase
-      .from("knowledge_documents")
-      .insert({
-        file_name: fileName,
-        status: "PROCESSANDO",
-        updated_at: timestamp
-      })
-      .select()
-      .single();
+  // 1. Check if the document already exists in the database to support safe, clean reindexing
+  const { data: existingDoc, error: existingDocError } = await supabase
+    .from("knowledge_documents")
+    .select("id, status")
+    .eq("file_name", fileName)
+    .maybeSingle();
 
-    if (documentError) throw documentError;
-    return document;
-  };
+  let documentId: string;
 
-  const document = await retryWithBackoff(docInsertCall, 3, 1000);
-  const documentId = document.id;
+  if (existingDoc) {
+    documentId = existingDoc.id;
+
+    // remover chunks antigos e remover embeddings antigos
+    await supabase
+      .from("knowledge_chunks")
+      .delete()
+      .eq("document_id", documentId);
+
+    // remover metadados antigos e atualizar status para PROCESSANDO
+    const docUpdateCall = async () => {
+      const { data: document, error: documentError } = await supabase
+        .from("knowledge_documents")
+        .update({
+          status: "PROCESSANDO",
+          total_chunks: 0,
+          total_embeddings: 0,
+          extracted_chars: 0,
+          updated_at: timestamp
+        })
+        .eq("id", documentId)
+        .select()
+        .single();
+
+      if (documentError) throw documentError;
+      return document;
+    };
+
+    await retryWithBackoff(docUpdateCall, 3, 1000);
+  } else {
+    // Insert the document metadata row with retries in PROCESSANDO status
+    const docInsertCall = async () => {
+      const { data: document, error: documentError } = await supabase
+        .from("knowledge_documents")
+        .insert({
+          file_name: fileName,
+          status: "PROCESSANDO",
+          updated_at: timestamp
+        })
+        .select()
+        .single();
+
+      if (documentError) throw documentError;
+      return document;
+    };
+
+    const document = await retryWithBackoff(docInsertCall, 3, 1000);
+    documentId = document.id;
+  }
 
   try {
     const processedChunks: { text: string; embedding: number[]; page: number }[] = [];
