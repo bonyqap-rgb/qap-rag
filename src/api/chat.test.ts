@@ -109,3 +109,88 @@ test("API POST /chat - returns 400 when message and question are empty", async (
   assert.strictEqual(body.success, false);
   assert.ok(body.error.includes("O campo 'message' é obrigatório"));
 });
+
+test("API POST /chat/diagnose - success in development with RAG diagnostic JSON", async () => {
+  const originalDiagnose = ChatService.diagnose;
+  const originalNodeEnv = process.env.NODE_ENV;
+  // Ensure we are treated as dev/test environment
+  process.env.NODE_ENV = "development";
+
+  ChatService.diagnose = async (question, options) => {
+    assert.strictEqual(question, "Como auditar o RAG?");
+    return {
+      pergunta: question,
+      embedding_gerado: [0.1, 0.2, 0.3],
+      chunks_encontrados: [
+        {
+          id: "chunk-1",
+          documentId: "doc-1",
+          filename: "manual.pdf",
+          chunkIndex: 0,
+          score: 0.9,
+          page: 1,
+          text: "Trecho de auditoria",
+          usedInContext: true,
+        }
+      ],
+      score: {
+        total_encontrados: 1,
+        max_score: 0.9,
+        avg_score: 0.9,
+        threshold_utilizado: 0.3,
+      },
+      documentos: ["manual.pdf"],
+      paginas: [1],
+      "páginas": [1],
+      contexto_final: "Trecho de auditoria",
+      prompt_enviado: {
+        systemPrompt: "Instruções do Sistema",
+        userPrompt: "Prompt do Usuário",
+        completo: "Prompt Completo",
+      },
+      resposta_do_modelo: "Resposta auditada",
+      metadata: { model: "llama3", duration_ms: 120 },
+    };
+  };
+
+  try {
+    const res = await fetch(`${baseUrl}/diagnose`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Como auditar o RAG?" }),
+    });
+
+    assert.strictEqual(res.status, 200);
+    const body = (await res.json()) as any;
+
+    assert.strictEqual(body.pergunta, "Como auditar o RAG?");
+    assert.deepStrictEqual(body.embedding_gerado, [0.1, 0.2, 0.3]);
+    assert.strictEqual(body.chunks_encontrados[0].id, "chunk-1");
+    assert.strictEqual(body.score.max_score, 0.9);
+    assert.strictEqual(body.resposta_do_modelo, "Resposta auditada");
+  } finally {
+    ChatService.diagnose = originalDiagnose;
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test("API POST /chat/diagnose - returns 403 when in production environment", async () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  // Simulate production environment
+  process.env.NODE_ENV = "production";
+
+  try {
+    const res = await fetch(`${baseUrl}/diagnose`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Como auditar o RAG?" }),
+    });
+
+    assert.strictEqual(res.status, 403);
+    const body = (await res.json()) as any;
+    assert.strictEqual(body.success, false);
+    assert.ok(body.error.includes("disponível apenas no ambiente de desenvolvimento"));
+  } finally {
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});

@@ -6,6 +6,7 @@ import { chatWithContextConfigurable } from "../groq/chat.js";
 import { supabase } from "../config/supabase.js";
 import { logger } from "./logger.service.js";
 import { metricsService } from "./metrics.service.js";
+import { createEmbedding } from "../groq/embed.js";
 
 export interface ChatOptions {
   temperature?: number;
@@ -259,6 +260,17 @@ export class ChatService {
         chunksCount: 0,
       });
 
+      ChatService.logRagPipelineFlow(
+        question,
+        0,
+        0,
+        [],
+        [],
+        [],
+        0,
+        "Não encontrei essa informação na base de conhecimento."
+      );
+
       return {
         answer: "Não encontrei essa informação na base de conhecimento.",
         sources: [],
@@ -324,6 +336,17 @@ export class ChatService {
         documentsCount: 0,
         chunksCount: 0,
       });
+
+      ChatService.logRagPipelineFlow(
+        question,
+        resultsCount,
+        searchResults.length > 0 ? Math.max(...searchResults.map(r => r.score)) : 0,
+        [],
+        [],
+        [],
+        0,
+        "Não encontrei essa informação na base de conhecimento."
+      );
 
       return {
         answer: "Não encontrei essa informação na base de conhecimento.",
@@ -394,6 +417,22 @@ export class ChatService {
       chunksCount: sources.length,
     });
 
+    const topScore = searchResults.length > 0 ? Math.max(...searchResults.map(r => r.score)) : 0;
+    const finalDocNames = Array.from(new Set(finalUsedChunks.map(c => c.documentName).filter(Boolean))) as string[];
+    const finalPages = Array.from(new Set(finalUsedChunks.map(c => (c as any).page).filter(p => p !== undefined && p !== null))) as (string | number)[];
+    const finalArticles = Array.from(new Set(finalUsedChunks.map(c => c.article).filter(Boolean))) as string[];
+
+    ChatService.logRagPipelineFlow(
+      question,
+      resultsCount,
+      topScore,
+      finalDocNames,
+      finalPages,
+      finalArticles,
+      context.length,
+      answer
+    );
+
     return {
       answer,
       sources,
@@ -403,5 +442,237 @@ export class ChatService {
         totalTime: `${overallDuration.toFixed(0)}ms`,
       },
     };
+  }
+
+  /**
+   * Executes a complete RAG pipeline diagnosis.
+   * Returns intermediate steps and embeddings for auditing purposes.
+   */
+  static async diagnose(question: string, options: ChatOptions = {}): Promise<any> {
+    const overallStartTime = performance.now();
+
+    // 1. Generate embedding first to return it in diagnosis
+    const embedding = await createEmbedding(question);
+
+    // Resolve parameter configuration with fallbacks
+    const topK = options.topK !== undefined ? options.topK : (env.DEFAULT_TOP_K ?? 5);
+    const scoreThreshold = options.scoreThreshold !== undefined ? options.scoreThreshold : (env.DEFAULT_MIN_SCORE ?? 0.3);
+    const maxContextSize = options.maxContextSize !== undefined ? options.maxContextSize : (env.DEFAULT_MAX_CONTEXT_SIZE ?? 4000);
+    const temperature = options.temperature !== undefined ? options.temperature : 0;
+    const timeout = options.timeout !== undefined ? options.timeout : 25000;
+    let model = options.model !== undefined ? options.model : env.DEFAULT_CHAT_MODEL;
+
+    // A. Resolve document scope from the question or filters
+    const resolvedDocs = await ChatService.resolveDocuments(question, options.filters);
+    const activeFilters: any = { ...options.filters };
+
+    if (resolvedDocs.length === 1) {
+      activeFilters.documentId = resolvedDocs[0].documentId;
+    } else if (resolvedDocs.length > 1) {
+      activeFilters.documentIds = resolvedDocs.map(d => d.documentId);
+      delete activeFilters.documentId;
+    }
+
+    // 2. Perform Semantic Search
+    let searchResults = [];
+    try {
+      if (resolvedDocs.length > 1) {
+        const minChunks = options.minChunksPerDocument !== undefined
+          ? options.minChunksPerDocument
+          : env.DEFAULT_MIN_CHUNKS_PER_DOCUMENT;
+
+        const searchPromises = resolvedDocs.map(async (doc) => {
+          const docFilters = { ...options.filters, documentId: doc.documentId };
+          if ((docFilters as any).documentIds) {
+            delete (docFilters as any).documentIds;
+          }
+          return SearchService.search(
+            question,
+            minChunks,
+            scoreThreshold,
+            docFilters
+          );
+        });
+
+        const individualResults = await Promise.all(searchPromises);
+        const combinedResults = individualResults.flat();
+        combinedResults.sort((a, b) => b.score - a.score);
+
+        const seenTexts = new Set<string>();
+        const uniqueCombinedResults = [];
+        for (const r of combinedResults) {
+          const norm = (r?.text ?? "").trim().toLowerCase();
+          if (!seenTexts.has(norm)) {
+            seenTexts.add(norm);
+            uniqueCombinedResults.push(r);
+          }
+        }
+        searchResults = uniqueCombinedResults;
+      } else {
+        searchResults = await SearchService.search(
+          question,
+          topK,
+          scoreThreshold,
+          activeFilters
+        );
+      }
+    } catch (error: any) {
+      logger.error("Erro na busca vetorial para diagnóstico", error);
+      throw error;
+    }
+
+    const resultsCount = searchResults.length;
+
+    // 3. Retrieve Filenames for the retrieved Document IDs
+    const docIds = Array.from(new Set(searchResults.map((r) => r.documentId)));
+    const docMap = new Map<string, string>();
+    if (docIds.length > 0) {
+      try {
+        const { data: matchedDocs, error: docError } = await supabase
+          .from("knowledge_documents")
+          .select("id, file_name")
+          .in(// @ts-ignore
+            "id", docIds);
+
+        if (!docError && matchedDocs) {
+          for (const d of matchedDocs) {
+            docMap.set(d.id, d.file_name);
+          }
+        }
+      } catch (error: any) {
+        logger.error("Erro ao carregar nomes de arquivos no diagnóstico", error);
+      }
+    }
+
+    const chunksToProcess = searchResults.map(r => ({
+      ...r,
+      documentName: docMap.get(r.documentId) || r.metadata?.sourceDocument || "Desconhecido",
+    }));
+
+    // 4. Build Context
+    const { context, selectedChunks: finalUsedChunks } = ContextBuilderService.buildContextDetailed(chunksToProcess, maxContextSize);
+
+    const systemPrompt = PromptBuilderService.buildSystemPrompt();
+    const userPrompt = PromptBuilderService.buildUserPrompt(question, context);
+
+    let answer = "";
+    if (finalUsedChunks.length > 0) {
+      try {
+        answer = await chatWithContextConfigurable(question, context, {
+          model,
+          temperature,
+          timeout,
+          systemPrompt,
+          userPrompt,
+        });
+      } catch (error: any) {
+        answer = `Erro ao invocar LLM no diagnóstico: ${error.message}`;
+      }
+    } else {
+      answer = "Não encontrei essa informação na base de conhecimento (diagnóstico: contexto de suporte vazio/insuficiente).";
+    }
+
+    // Build lists for diagnostic output
+    const processedChunksInfo = chunksToProcess.map(c => ({
+      id: (c as any).id,
+      documentId: c.documentId,
+      filename: c.documentName,
+      chunkIndex: c.chunkIndex,
+      score: c.score,
+      similarity: c.score,
+      page: c.metadata?.pageNumber || (c as any).page || "não especificado",
+      text: c.text,
+      usedInContext: finalUsedChunks.some(f => f.documentId === c.documentId && f.chunkIndex === c.chunkIndex),
+    }));
+
+    const uniqueDocNames = Array.from(new Set(processedChunksInfo.map(c => c.filename)));
+    const uniquePages = Array.from(new Set(processedChunksInfo.map(c => c.page).filter(p => p !== "não especificado")));
+
+    return {
+      pergunta: question,
+      embedding_gerado: embedding,
+      chunks_encontrados: processedChunksInfo,
+      score: {
+        total_encontrados: resultsCount,
+        max_score: resultsCount > 0 ? Math.max(...searchResults.map(r => r.score)) : 0,
+        avg_score: resultsCount > 0 ? searchResults.reduce((sum, r) => sum + r.score, 0) / resultsCount : 0,
+        threshold_utilizado: scoreThreshold
+      },
+      documentos: uniqueDocNames,
+      paginas: uniquePages,
+      "páginas": uniquePages,
+      contexto_final: context,
+      prompt_enviado: {
+        systemPrompt,
+        userPrompt,
+        completo: `=== SYSTEM ===\n${systemPrompt}\n\n=== USER ===\n${userPrompt}`
+      },
+      resposta_do_modelo: answer,
+      metadata: {
+        model,
+        temperature,
+        topK,
+        duration_ms: parseFloat((performance.now() - overallStartTime).toFixed(2))
+      }
+    };
+  }
+
+  /**
+   * Generates formatted vertical structured logging of the RAG pipeline flow.
+   */
+  private static logRagPipelineFlow(
+    question: string,
+    resultsCount: number,
+    topScore: number,
+    docNames: string[],
+    pages: (string | number)[],
+    articles: string[],
+    contextLength: number,
+    answer: string
+  ): void {
+    const formattedDocs = docNames.length > 0 ? docNames.join(", ") : "Nenhum";
+    const formattedPages = pages.length > 0 ? pages.join(", ") : "Nenhuma";
+    const formattedArticles = articles.length > 0 ? articles.join(", ") : "Nenhum";
+    const responseExcerpt = answer.length > 100 ? `${answer.substring(0, 100)}...` : answer;
+
+    const logBlock = `
+=== PIPELINE RAG AUDIT LOG ===
+Consulta: "${question}"
+↓
+Embedding OK
+↓
+Busca vetorial OK
+↓
+${resultsCount} chunks encontrados
+↓
+Top score: ${topScore.toFixed(4)}
+↓
+Documento:
+${formattedDocs}
+↓
+Página:
+${formattedPages}
+↓
+Artigo:
+${formattedArticles}
+↓
+Contexto:
+${contextLength.toLocaleString("pt-BR")} caracteres
+↓
+Groq
+↓
+Resposta: "${responseExcerpt}"
+==============================
+`;
+    console.log(logBlock);
+    logger.info("Pipeline RAG executado", {
+      question: "[REDACTED]",
+      resultsCount,
+      topScore,
+      documents: docNames,
+      pages,
+      articles,
+      contextLength,
+    });
   }
 }

@@ -162,28 +162,20 @@ test("SearchService - search with documentId filter", async () => {
 
   supabase.rpc = function (fnName: string, args: any) {
     if (fnName === "match_documents") {
-      const queryBuilder = {
-        eq: (col: string, val: string) => {
-          if (col === "document_id") calledWithDocumentId = val;
-          return Promise.resolve({
-            data: [
-              {
-                document_id: val,
-                chunk_index: 0,
-                content: "Trecho filtrado",
-                similarity: 0.8,
-              },
-            ],
-            error: null,
-          });
-        },
-        then: (resolve: any) =>
-          resolve({
-            data: [],
-            error: null,
-          }),
-      };
-      return queryBuilder as any;
+      if (args && args.filter_document_id) {
+        calledWithDocumentId = args.filter_document_id;
+      }
+      return Promise.resolve({
+        data: [
+          {
+            document_id: "doc-filtrado-123",
+            chunk_index: 0,
+            content: "Trecho filtrado",
+            similarity: 0.8,
+          },
+        ],
+        error: null,
+      }) as any;
     }
     return originalRpc.call(supabase, fnName as any, args);
   } as any;

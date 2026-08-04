@@ -106,19 +106,21 @@ export class SearchService {
     console.log(`[SEARCH] Consulta RPC utilizada: rpc("match_documents", { query_embedding: [array de dimensão ${finalEmbedding.length}], match_count: ${rawLimit} })`);
     console.log(`[SEARCH] Filtros ativos: Não existem filtros por tenant, organização, usuário ou status que eliminem registros na tabela ou na RPC.`);
 
-    let dbQuery = supabase.rpc("match_documents", {
+    const rpcParams: any = {
       query_embedding: finalEmbedding,
       match_count: rawLimit,
-    });
+    };
 
     if (activeDocumentIdFilters !== null) {
-      console.log(`[SEARCH] Aplicando filtro PostgREST de document_id: ${JSON.stringify(activeDocumentIdFilters)}`);
+      console.log(`[SEARCH] Aplicando filtro document_id via parâmetros RPC: ${JSON.stringify(activeDocumentIdFilters)}`);
       if (activeDocumentIdFilters.length === 1) {
-        dbQuery = dbQuery.eq("document_id", activeDocumentIdFilters[0]);
+        rpcParams.filter_document_id = activeDocumentIdFilters[0];
       } else {
-        dbQuery = dbQuery.in("document_id", activeDocumentIdFilters);
+        rpcParams.filter_document_ids = activeDocumentIdFilters;
       }
     }
+
+    let dbQuery = supabase.rpc("match_documents", rpcParams);
 
     let rawResults: any[] | null = null;
     let rpcError: any = null;
@@ -137,18 +139,21 @@ export class SearchService {
     // Fallback if match_documents failed
     if (rpcError) {
       console.warn(`[SEARCH] RPC 'match_documents' falhou ou não existe (${rpcError.message || rpcError}). Tentando fallback para 'match_knowledge_chunks'...`);
-      let fallbackQuery = supabase.rpc("match_knowledge_chunks", {
+
+      const fallbackParams: any = {
         query_embedding: finalEmbedding,
         match_count: rawLimit,
-      });
+      };
 
       if (activeDocumentIdFilters !== null) {
         if (activeDocumentIdFilters.length === 1) {
-          fallbackQuery = fallbackQuery.eq("document_id", activeDocumentIdFilters[0]);
+          fallbackParams.filter_document_id = activeDocumentIdFilters[0];
         } else {
-          fallbackQuery = fallbackQuery.in("document_id", activeDocumentIdFilters);
+          fallbackParams.filter_document_ids = activeDocumentIdFilters;
         }
       }
+
+      let fallbackQuery = supabase.rpc("match_knowledge_chunks", fallbackParams);
 
       try {
         const response = await fallbackQuery;
