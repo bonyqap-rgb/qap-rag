@@ -262,6 +262,154 @@ test("ChatService.resolveDocuments - resolves 'RDPM' keyword correctly", async (
   }
 });
 
+test("ChatService.resolveDocuments - should restrict correctly on explicit mentions", async () => {
+  const originalFrom = supabase.from;
+  const mockDocs = [
+    { id: "rdpm-uuid", file_name: "RDPM_regulamento.pdf" },
+    { id: "cpm-uuid", file_name: "Codigo Penal Militar Comentado.pdf" },
+    { id: "i18-uuid", file_name: "I-18-PM.pdf" },
+    { id: "i36-uuid", file_name: "I-36-PM.pdf" },
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          then: (resolve: any) => resolve({ data: mockDocs, error: null })
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  try {
+    // 1. "No RDPM..."
+    const res1 = await ChatService.resolveDocuments("No RDPM o processo é sumário?");
+    assert.strictEqual(res1.length, 1);
+    assert.strictEqual(res1[0].documentId, "rdpm-uuid");
+
+    // 2. "Segundo o Código Penal Militar..."
+    const res2 = await ChatService.resolveDocuments("Segundo o Código Penal Militar qual a pena?");
+    assert.strictEqual(res2.length, 1);
+    assert.strictEqual(res2[0].documentId, "cpm-uuid");
+
+    // 3. "Conforme a I-18..."
+    const res3 = await ChatService.resolveDocuments("Conforme a I-18...");
+    assert.strictEqual(res3.length, 1);
+    assert.strictEqual(res3[0].documentId, "i18-uuid");
+
+    // 4. "Na I-36..."
+    const res4 = await ChatService.resolveDocuments("Na I-36...");
+    assert.strictEqual(res4.length, 1);
+    assert.strictEqual(res4[0].documentId, "i36-uuid");
+  } finally {
+    supabase.from = originalFrom;
+  }
+});
+
+test("ChatService.resolveDocuments - should NOT restrict on generic questions", async () => {
+  const originalFrom = supabase.from;
+  const mockDocs = [
+    { id: "rdpm-uuid", file_name: "RDPM_regulamento.pdf" },
+    { id: "cpm-uuid", file_name: "Codigo Penal Militar Comentado.pdf" },
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          then: (resolve: any) => resolve({ data: mockDocs, error: null })
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  try {
+    const genericQuestions = [
+      "Quais os prazos do PAD?",
+      "Como funciona o processo disciplinar?",
+      "Quais são as fases do PADM?",
+      "O policial militar pode...",
+      "Como funciona um recurso administrativo?",
+    ];
+
+    for (const q of genericQuestions) {
+      const res = await ChatService.resolveDocuments(q);
+      assert.strictEqual(res.length, 0, `Question "${q}" should not resolve to any document but got ${JSON.stringify(res)}`);
+    }
+  } finally {
+    supabase.from = originalFrom;
+  }
+});
+
+test("ChatService.chat - should execute global search fallback when restricted search returns 0 results", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  const mockDocs = [
+    { id: "cpm-uuid", file_name: "Codigo Penal Militar Comentado.pdf" },
+    { id: "rdpm-uuid", file_name: "RDPM_regulamento.pdf" },
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({ data: mockDocs, error: null }),
+          then: (resolve: any) => resolve({ data: mockDocs, error: null })
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  const capturedSearches: { query: string; filters: any }[] = [];
+  SearchService.search = async (query, topK, score, filters) => {
+    capturedSearches.push({ query, filters });
+    if (filters?.documentId === "cpm-uuid") {
+      // First search (restricted to Code Penal Militar because we'll pass CPM filter)
+      return [];
+    } else {
+      // Global search fallback (no documentId filter)
+      return [
+        {
+          documentId: "rdpm-uuid",
+          chunkIndex: 2,
+          score: 0.88,
+          text: "Prazo para recurso é de 5 dias.",
+        }
+      ];
+    }
+  };
+
+  setChatImplementation(async () => {
+    return "O prazo para recurso é de 5 dias segundo o regulamento.";
+  });
+
+  try {
+    // Explicitly restrict to CPM (e.g. via options filters)
+    const res = await ChatService.chat("Qual o prazo do recurso?", {
+      filters: { documentId: "cpm-uuid" }
+    });
+
+    assert.strictEqual(res.answer, "O prazo para recurso é de 5 dias segundo o regulamento.");
+    assert.strictEqual(res.sources.length, 1);
+    assert.strictEqual(res.sources[0].documentId, "rdpm-uuid");
+
+    // We expect two searches:
+    // 1. Restricted search with documentId = "cpm-uuid"
+    // 2. Global fallback search with documentId deleted
+    assert.strictEqual(capturedSearches.length, 2);
+    assert.strictEqual(capturedSearches[0].filters.documentId, "cpm-uuid");
+    assert.strictEqual(capturedSearches[1].filters.documentId, undefined);
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});
+
 test("ChatService.chat - Balanced Multi-Document Retrieval behavior when multiple documents are matched", async () => {
   const originalSearch = SearchService.search;
   const originalFrom = supabase.from;
