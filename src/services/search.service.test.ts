@@ -77,9 +77,9 @@ test("SearchService - search successfully with results sorted by score", async (
             similarity: 0.85,
           },
           {
-            document_id: "doc-1",
+            document_id: "doc-2",
             chunk_index: 1,
-            content: "[METADATA:{\"sourceDocument\":\"test.pdf\"}]\nEste é o segundo trecho.",
+            content: "[METADATA:{\"sourceDocument\":\"test2.pdf\"}]\nEste é o segundo trecho.",
             similarity: 0.95, // Higher similarity
           },
         ],
@@ -98,6 +98,123 @@ test("SearchService - search successfully with results sorted by score", async (
     assert.strictEqual(results[0].text, "Este é o segundo trecho.");
     assert.strictEqual(results[1].score, 0.85);
     assert.strictEqual(results[1].text, "Este é o primeiro trecho.");
+  } finally {
+    supabase.rpc = originalRpc;
+  }
+});
+
+test("SearchService - Retrieval Precision & Recall: Specific Juridical Query (PAD / RDPM prioritized)", async () => {
+  const originalRpc = supabase.rpc;
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      return {
+        data: [
+          {
+            document_id: "doc-medical",
+            chunk_index: 0,
+            content: "[METADATA:{\"sourceDocument\":\"licenca_medica.pdf\"}]\nEste é o documento de afastamento médico e licenças de saúde do militar.",
+            similarity: 0.42,
+          },
+          {
+            document_id: "doc-pad",
+            chunk_index: 0,
+            content: "[METADATA:{\"sourceDocument\":\"pad_disciplinar.pdf\"}]\nArtigo 12. Os prazos e fases do processo administrativo disciplinar militar de rito sumário.",
+            similarity: 0.40, // lower raw similarity but contains specific PAD/RDPM info and rich metadata
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Quais os prazos e fases do processo administrativo disciplinar militar?", 5, 0.3);
+
+    assert.strictEqual(results.length, 2);
+    // PAD document should be boosted to the top due to explicit mentions, metadata structure, and keyword overlap
+    assert.strictEqual(results[0].documentId, "doc-pad");
+    assert.ok(results[0].score > results[1].score);
+  } finally {
+    supabase.rpc = originalRpc;
+  }
+});
+
+test("SearchService - Retrieval Precision & Recall: Explicit Document Priority (RDPM mentioned)", async () => {
+  const originalRpc = supabase.rpc;
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      return {
+        data: [
+          {
+            document_id: "doc-i36",
+            chunk_index: 0,
+            content: "[METADATA:{\"sourceDocument\":\"instrucao_36_afastamentos.pdf\"}]\nAfastamento por licença prêmio regulamentada na instrução de serviço.",
+            similarity: 0.45,
+          },
+          {
+            document_id: "doc-rdpm",
+            chunk_index: 0,
+            content: "[METADATA:{\"sourceDocument\":\"regulamento_disciplinar_rdpm.pdf\"}]\nO regulamento disciplinar militar aborda conduta e penalidades.",
+            similarity: 0.38,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Segundo o RDPM...", 5, 0.3);
+
+    assert.strictEqual(results.length, 2);
+    // RDPM document should be boosted due to explicit query reference "RDPM"
+    assert.strictEqual(results[0].documentId, "doc-rdpm");
+    assert.ok(results[0].score > results[1].score);
+  } finally {
+    supabase.rpc = originalRpc;
+  }
+});
+
+test("SearchService - Retrieval Precision & Recall: Generic Query without explicit document reference (maintains diversity)", async () => {
+  const originalRpc = supabase.rpc;
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      return {
+        data: [
+          {
+            document_id: "doc-afastamento",
+            chunk_index: 0,
+            content: "[METADATA:{\"sourceDocument\":\"licencas.pdf\"}]\nLicença médica por motivo de saúde pessoal ou familiar.",
+            similarity: 0.50,
+          },
+          {
+            document_id: "doc-afastamento",
+            chunk_index: 1,
+            content: "[METADATA:{\"sourceDocument\":\"licencas.pdf\"}]\nComo funciona uma licença médica de curto prazo para praças.",
+            similarity: 0.49,
+          },
+          {
+            document_id: "doc-movimentacao",
+            chunk_index: 0,
+            content: "[METADATA:{\"sourceDocument\":\"movimentacao.pdf\"}]\nRemoção e transferência a pedido para tratamento de saúde.",
+            similarity: 0.45,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Como funciona uma licença médica?", 5, 0.3);
+
+    assert.strictEqual(results.length, 3);
+    // Chunks from doc-afastamento should suffer a diversity penalty, allowing doc-movimentacao to rise/stay highly relevant
+    // In this case, rank 1 is doc-afastamento (idx 0), rank 2 should be doc-movimentacao (originally 0.45, whereas doc-afastamento chunk 1 is penalized from 0.49 to 0.41)
+    assert.strictEqual(results[1].documentId, "doc-movimentacao");
   } finally {
     supabase.rpc = originalRpc;
   }
