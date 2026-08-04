@@ -4,6 +4,11 @@ import { supabase } from "../config/supabase.js";
 import { createEmbedding } from "../groq/embed.js";
 import { indexingHistoryService } from "./indexing-history.service.js";
 import { logger } from "./logger.service.js";
+import fs from "fs/promises";
+import path from "path";
+import { readPdf } from "../pdf/readPdf.js";
+import { createChunks } from "../chunker/createChunks.js";
+import { saveKnowledge } from "./saveKnowledge.js";
 
 export class ValidationError extends Error {
   status = 400;
@@ -313,19 +318,21 @@ export class DocumentService {
 
     let kDocId: string | null = null;
     let filename = "";
+    let status = "";
 
     // Try to find corresponding knowledge document directly from knowledge_documents table
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
     if (isUuid) {
       const { data: kDoc, error: kDocError } = await supabase
         .from("knowledge_documents")
-        .select("id, file_name")
+        .select("id, file_name, status")
         .eq("id", id)
         .maybeSingle();
 
       if (!kDocError && kDoc) {
         kDocId = kDoc.id;
-        filename = kDoc.file_name;
+        filename = kDoc.file_name || "";
+        status = kDoc.status || "";
       }
     }
 
@@ -333,13 +340,14 @@ export class DocumentService {
       // Try to find by file_name in knowledge_documents
       const { data: kDoc, error: kDocError } = await supabase
         .from("knowledge_documents")
-        .select("id, file_name")
+        .select("id, file_name, status")
         .eq("file_name", id)
         .maybeSingle();
 
       if (!kDocError && kDoc) {
         kDocId = kDoc.id;
-        filename = kDoc.file_name;
+        filename = kDoc.file_name || "";
+        status = kDoc.status || "";
       }
     }
 
@@ -347,7 +355,84 @@ export class DocumentService {
       throw new NotFoundError(`Documento de conhecimento correspondente a '${id}' não encontrado.`);
     }
 
-    // Fetch existing chunks
+    const filePath = filename ? path.join(process.cwd(), "storage", "documents", filename) : "";
+    let fileExists = false;
+    if (filePath) {
+      try {
+        await fs.access(filePath);
+        fileExists = true;
+      } catch {
+        fileExists = false;
+      }
+    }
+
+    // Se o status do documento for INDEXAÇÃO_INVÁLIDA ou o arquivo físico do PDF existir no disco,
+    // devemos reprocessar o arquivo original do início para garantir reindexação segura.
+    if (status === "INDEXAÇÃO_INVÁLIDA" || fileExists) {
+      if (!fileExists) {
+        throw new ValidationError(
+          `Não é possível reprocessar o documento '${filename}' (status INDEXAÇÃO_INVÁLIDA) porque o arquivo PDF original não foi encontrado em storage/documents/.`
+        );
+      }
+
+      logger.info(`[REINDEX] Reprocessando PDF de forma segura para o arquivo '${filename}'...`);
+      const startTime = performance.now();
+      const timestamp = new Date().toISOString();
+
+      try {
+        // 1. Reprocessar o PDF: Ler o buffer do arquivo PDF original do disco
+        const pdfBuffer = await fs.readFile(filePath);
+
+        // 2. Extrair o texto do PDF
+        const text = await readPdf(pdfBuffer);
+
+        // 3. Fatiar em chunks semânticos
+        const chunksList = createChunks(text);
+
+        // 4. Gerar novos embeddings de 1536 dimensões
+        const embeddings: number[][] = [];
+        for (const chunk of chunksList) {
+          embeddings.push(await createEmbedding(chunk));
+        }
+
+        // 5. Gravar novamente, Validar e Marcar como INDEXADO através de saveKnowledge
+        const updatedDocId = await saveKnowledge(filename, chunksList, embeddings);
+
+        const duration = Math.round(performance.now() - startTime);
+
+        return {
+          success: true,
+          message: "Documento reprocessado e reindexado com sucesso.",
+          chunksCount: chunksList.length,
+          durationMs: duration
+        };
+      } catch (error: any) {
+        const duration = Math.round(performance.now() - startTime);
+
+        // Em caso de erro, garantir que o status do documento seja atualizado para INDEXAÇÃO_INVÁLIDA
+        await supabase
+          .from("knowledge_documents")
+          .update({
+            status: "INDEXAÇÃO_INVÁLIDA",
+            updated_at: timestamp
+          })
+          .eq("id", kDocId);
+
+        await indexingHistoryService.record({
+          document: filename,
+          date: timestamp,
+          duration,
+          chunks_count: 0,
+          embeddings_count: 0,
+          success: false,
+          error_message: error.message || String(error)
+        });
+
+        throw error;
+      }
+    }
+
+    // Fetch existing chunks (fallback para reindexação baseada apenas em chunks antigos)
     const { data: chunks, error: chunksError } = await supabase
       .from("knowledge_chunks")
       .select("chunk_index, content")

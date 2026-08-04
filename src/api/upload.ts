@@ -1,5 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
+import fs from "fs/promises";
+import path from "path";
 import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
 import { createEmbedding } from "../groq/embed.js";
@@ -40,6 +42,17 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       filename: fileName,
       fileSize: req.file.size,
     });
+
+    // Salva o PDF fisicamente em storage/documents/ para suporte a reprocessamento seguro
+    try {
+      const storageDir = path.join(process.cwd(), "storage", "documents");
+      await fs.mkdir(storageDir, { recursive: true });
+      const filePath = path.join(storageDir, fileName);
+      await fs.writeFile(filePath, req.file.buffer);
+      logger.info(`[ADMIN] PDF salvo fisicamente em: ${filePath}`);
+    } catch (fsErr: any) {
+      logger.warn(`[ADMIN] Erro ao salvar arquivo PDF físico: ${fsErr.message || fsErr}`);
+    }
 
     // 1. Parsing robusto de PDF com limpeza e formatação de marcações
     const text = await readPdf(req.file.buffer);
