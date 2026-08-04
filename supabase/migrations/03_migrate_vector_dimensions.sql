@@ -23,9 +23,12 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_embedding
   ON public.knowledge_chunks USING hnsw (embedding vector_cosine_ops);
 
 -- 6. Recreate the match_documents RPC to strictly enforce and perform 1536x1536 comparisons
+-- Supports optional document filters to guarantee filtering is performed BEFORE ORDER BY and LIMIT in the SQL engine
 CREATE OR REPLACE FUNCTION public.match_documents (
   query_embedding vector(1536),
-  match_count int
+  match_count int,
+  filter_document_id uuid DEFAULT NULL,
+  filter_document_ids uuid[] DEFAULT NULL
 )
 RETURNS TABLE (
   id uuid,
@@ -46,15 +49,20 @@ BEGIN
     1 - (kc.embedding <=> query_embedding) AS similarity
   FROM public.knowledge_chunks kc
   WHERE kc.embedding IS NOT NULL  -- Only compare with non-null embeddings during transition/indexing
+    AND (filter_document_id IS NULL OR kc.document_id = filter_document_id)
+    AND (filter_document_ids IS NULL OR kc.document_id = ANY(filter_document_ids))
   ORDER BY kc.embedding <=> query_embedding
   LIMIT match_count;
 END;
 $$;
 
 -- 7. Create the match_knowledge_chunks RPC as a synchronized alias for match_documents
+-- Supports optional document filters to guarantee filtering is performed BEFORE ORDER BY and LIMIT in the SQL engine
 CREATE OR REPLACE FUNCTION public.match_knowledge_chunks (
   query_embedding vector(1536),
-  match_count int
+  match_count int,
+  filter_document_id uuid DEFAULT NULL,
+  filter_document_ids uuid[] DEFAULT NULL
 )
 RETURNS TABLE (
   id uuid,
@@ -75,6 +83,8 @@ BEGIN
     1 - (kc.embedding <=> query_embedding) AS similarity
   FROM public.knowledge_chunks kc
   WHERE kc.embedding IS NOT NULL
+    AND (filter_document_id IS NULL OR kc.document_id = filter_document_id)
+    AND (filter_document_ids IS NULL OR kc.document_id = ANY(filter_document_ids))
   ORDER BY kc.embedding <=> query_embedding
   LIMIT match_count;
 END;
