@@ -39,6 +39,123 @@ export interface ChatResponse {
   };
 }
 
+const FORBIDDEN_GENERIC_WORDS = new Set([
+  "militar",
+  "policia",
+  "policial",
+  "codigo",
+  "regulamento",
+  "processo",
+  "artigo",
+  "disciplinar",
+  "administrativo",
+  "instrucao",
+  "pm",
+  "pdf",
+  "manual",
+  "comentado",
+  "documento",
+  "instrucoes",
+  "regulamentos",
+  "codigos",
+  "processos",
+  "artigos",
+  "militarizado",
+  "policiais",
+  "lei",
+  "leis",
+  "decreto",
+  "decretos",
+  "resolucao",
+  "resolucoes",
+  "portaria",
+  "portarias",
+  "de",
+  "do",
+  "da",
+  "o",
+  "a",
+  "os",
+  "as",
+  "um",
+  "uma",
+  "em",
+  "no",
+  "na",
+  "nos",
+  "nas",
+  "para",
+  "com",
+  "por"
+]);
+
+function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // remove accents
+    .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, " ") // replace punctuation, hyphens, underscores with space
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegex(text: string): string {
+  return text.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+}
+
+function getFilenameAliases(fileName: string): string[] {
+  const cleanName = fileName.toLowerCase().replace(/\.[^/.]+$/, ""); // remove extension
+  const normName = normalizeText(cleanName);
+
+  const aliases = new Set<string>();
+
+  // Add normalized full clean name (with and without spaces)
+  aliases.add(normName);
+  aliases.add(normName.replace(/\s+/g, ""));
+
+  // Split parts
+  const parts = normName.split(/\s+/);
+
+  // If we have parts like "i" and "18" (originally "I-18"), let's preserve combinations
+  // Look for any pattern in filename that matches letters + numbers, like i-18, i-2, pop-101
+  const rawClean = cleanName.toLowerCase();
+  const specMatches = rawClean.match(/[a-z]+-?\d+/g);
+  if (specMatches) {
+    for (const match of specMatches) {
+      const normMatch = normalizeText(match);
+      aliases.add(normMatch);
+      aliases.add(normMatch.replace(/\s+/g, ""));
+    }
+  }
+
+  // Build acronym for parts
+  if (parts.length > 1) {
+    const acronym = parts.map(p => p[0]).join("");
+    if (acronym.length >= 2) {
+      aliases.add(acronym);
+    }
+  }
+
+  // Explicit mappings for well-known acronyms
+  if (normName.includes("codigo penal militar")) {
+    aliases.add("cpm");
+    aliases.add("codigo penal militar");
+  }
+  if (normName.includes("regulamento disciplinar")) {
+    aliases.add("rdpm");
+    aliases.add("regulamento disciplinar");
+  }
+
+  // Also add any word in the filename that is NOT generic and is at least 3 chars
+  for (const part of parts) {
+    if (part.length >= 3 && !FORBIDDEN_GENERIC_WORDS.has(part)) {
+      aliases.add(part);
+    }
+  }
+
+  return Array.from(aliases).filter(a => a.trim().length >= 2);
+}
+
 export class ChatService {
   /**
    * Resolves document scope based on keywords inside the question or filters.
@@ -73,7 +190,7 @@ export class ChatService {
       }
     }
 
-    const lowerQuestion = question.toLowerCase();
+    const normQuestion = normalizeText(question);
 
     // 2. Fetch all documents to perform matching
     try {
@@ -88,19 +205,15 @@ export class ChatService {
           const fileName = doc.file_name ?? "";
           if (!fileName) continue;
 
-          const cleanName = fileName.toLowerCase().replace(/\.[^/.]+$/, "");
+          const aliases = getFilenameAliases(fileName);
           let isMatch = false;
 
-          if (cleanName && lowerQuestion.includes(cleanName)) {
-            isMatch = true;
-          } else {
-            // Also check for components of the filename
-            const parts = cleanName.split(/[_\s]+/);
-            for (const part of parts) {
-              if (part.length >= 3 && lowerQuestion.includes(part)) {
-                isMatch = true;
-                break;
-              }
+          for (const alias of aliases) {
+            const escaped = escapeRegex(alias);
+            const regex = new RegExp(`\\b${escaped}\\b`, "i");
+            if (regex.test(normQuestion)) {
+              isMatch = true;
+              break;
             }
           }
 
@@ -174,8 +287,15 @@ export class ChatService {
       "document_id": resolvedDocIds
     });
 
+    const isDocExplicitlyRequested = !!(options.filters?.documentId || resolvedDocs.length > 0);
+    const isRestrictedSearch = !!(activeFilters.documentId || activeFilters.documentIds);
+
     // 2. Perform Semantic Search
     let searchResults = [];
+    let initialResultsCount = 0;
+    let fallbackExecuted = false;
+    let globalResultsCount: number | undefined = undefined;
+
     const searchStartTime = performance.now();
     try {
       if (resolvedDocs.length > 1) {
@@ -223,6 +343,24 @@ export class ChatService {
           activeFilters
         );
       }
+
+      initialResultsCount = searchResults.length;
+
+      // 4. Fallback obrigatório: Caso exista filtro de documento e a busca retorne zero resultados, tenta busca global
+      if (initialResultsCount === 0 && isRestrictedSearch) {
+        fallbackExecuted = true;
+        const globalFilters = { ...activeFilters };
+        delete globalFilters.documentId;
+        delete globalFilters.documentIds;
+
+        searchResults = await SearchService.search(
+          question,
+          topK,
+          scoreThreshold,
+          globalFilters
+        );
+        globalResultsCount = searchResults.length;
+      }
     } catch (error: any) {
       logger.error("Erro na busca vetorial do banco vetorial", error);
       const err = new Error(`Erro na busca vetorial da base de dados: ${error.message}`);
@@ -232,6 +370,38 @@ export class ChatService {
     const searchTimeMs = performance.now() - searchStartTime;
 
     const resultsCount = searchResults.length;
+
+    // Print development logs when NODE_ENV === "development"
+    if (env.NODE_ENV === "development") {
+      logger.info(`[RESOLUTION AUDIT]
+Documento explicitamente solicitado:
+${isDocExplicitlyRequested ? "SIM" : "NÃO"}
+
+↓
+
+Documento resolvido
+${resolvedDocNames || "Nenhum"}
+
+↓
+
+Busca restrita
+${isRestrictedSearch ? "SIM" : "NÃO"}
+
+↓
+
+Resultados
+${initialResultsCount}
+
+↓
+
+Fallback executado?
+${fallbackExecuted ? "SIM" : "NÃO"}
+
+↓
+
+Resultados da busca global
+${globalResultsCount !== undefined ? globalResultsCount : "N/A"}`);
+    }
 
     // Log resultsCount as requested
     logger.info("Contagem de resultados da busca semântica", {
