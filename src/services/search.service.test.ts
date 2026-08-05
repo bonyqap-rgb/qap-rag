@@ -93,10 +93,10 @@ test("SearchService - search successfully with results sorted by score", async (
     const results = await SearchService.search("teste", 5, 0.3);
 
     assert.strictEqual(results.length, 2);
-    // Should be sorted by score descending
-    assert.strictEqual(results[0].score, 0.95);
+    // Should be sorted by score descending (with hybrid weights applied: vector similarity * 0.7)
+    assert.strictEqual(results[0].score, 0.95 * 0.7);
     assert.strictEqual(results[0].text, "Este é o segundo trecho.");
-    assert.strictEqual(results[1].score, 0.85);
+    assert.strictEqual(results[1].score, 0.85 * 0.7);
     assert.strictEqual(results[1].text, "Este é o primeiro trecho.");
   } finally {
     supabase.rpc = originalRpc;
@@ -213,7 +213,7 @@ test("SearchService - Retrieval Precision & Recall: Generic Query without explic
 
     assert.strictEqual(results.length, 3);
     // Chunks from doc-afastamento should suffer a diversity penalty, allowing doc-movimentacao to rise/stay highly relevant
-    // In this case, rank 1 is doc-afastamento (idx 0), rank 2 should be doc-movimentacao (originally 0.45, whereas doc-afastamento chunk 1 is penalized from 0.49 to 0.41)
+    // In this case, rank 1 is doc-afastamento (idx 0), rank 2 should be doc-movimentacao (originally 0.45 * 0.7, whereas doc-afastamento chunk 1 is penalized from 0.49 * 0.7 to 0.41)
     assert.strictEqual(results[1].documentId, "doc-movimentacao");
   } finally {
     supabase.rpc = originalRpc;
@@ -249,7 +249,7 @@ test("SearchService - search applies scoreThreshold correctly", async () => {
     const results = await SearchService.search("teste", 5, 0.5);
 
     assert.strictEqual(results.length, 1);
-    assert.strictEqual(results[0].score, 0.9);
+    assert.strictEqual(results[0].score, 0.9 * 0.7);
     assert.strictEqual(results[0].text, "Trecho altamente relevante");
   } finally {
     supabase.rpc = originalRpc;
@@ -337,6 +337,227 @@ test("SearchService - search handles error scenarios", async () => {
       () => SearchService.search("teste", 5, 0.3),
       /Erro na busca vetorial por RPC.*Internal DB Error/
     );
+  } finally {
+    supabase.rpc = originalRpc;
+  }
+});
+
+// PR 4 Additional Hybrid Search Tests
+
+test("SearchService - Hybrid Search: Query by article 'Artigo 42'", async () => {
+  const originalRpc = supabase.rpc;
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      // Vector search returns something generic or low similarity
+      return {
+        data: [
+          {
+            document_id: "doc-generic",
+            chunk_index: 5,
+            content: "[METADATA:{\"sourceDocument\":\"manual.pdf\"}]\nEste é um texto genérico sobre a corporação.",
+            similarity: 0.50,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    if (fnName === "match_knowledge_chunks_lexical") {
+      // Lexical search returns the exact match for Artigo 42
+      return {
+        data: [
+          {
+            document_id: "doc-art42",
+            chunk_index: 10,
+            content: "[METADATA:{\"sourceDocument\":\"rdpm.pdf\"}]\nArtigo 42. O militar estadual deve portar-se de maneira exemplar.",
+            similarity: 0.95,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Artigo 42", 5, 0.15);
+
+    assert.ok(results.length >= 1);
+    // Artigo 42 from rdpm.pdf should rank first due to high lexical score or combined rank
+    assert.strictEqual(results[0].documentId, "doc-art42");
+    assert.ok(results[0].text.includes("Artigo 42"));
+  } finally {
+    supabase.rpc = originalRpc;
+  }
+});
+
+test("SearchService - Hybrid Search: Query by acronym 'PAD'", async () => {
+  const originalRpc = supabase.rpc;
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      return {
+        data: [
+          {
+            document_id: "doc-generic",
+            chunk_index: 1,
+            content: "[METADATA:{\"sourceDocument\":\"geral.pdf\"}]\nManual de atendimento geral ao público da PMESP.",
+            similarity: 0.40,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    if (fnName === "match_knowledge_chunks_lexical") {
+      return {
+        data: [
+          {
+            document_id: "doc-pad",
+            chunk_index: 0,
+            content: "[METADATA:{\"sourceDocument\":\"instrucao_processo_pad.pdf\"}]\nO Processo Administrativo Disciplinar (PAD) é aplicável em faltas graves.",
+            similarity: 0.85,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("PAD", 5, 0.15);
+
+    assert.ok(results.length >= 1);
+    // PAD document should be boosted and prioritized
+    assert.strictEqual(results[0].documentId, "doc-pad");
+    assert.ok(results[0].text.includes("PAD"));
+  } finally {
+    supabase.rpc = originalRpc;
+  }
+});
+
+test("SearchService - Hybrid Search: Query by document 'Segundo o RDPM'", async () => {
+  const originalRpc = supabase.rpc;
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      return {
+        data: [
+          {
+            document_id: "doc-other",
+            chunk_index: 3,
+            content: "[METADATA:{\"sourceDocument\":\"outro_doc.pdf\"}]\nOutros temas não relacionados ao regulamento disciplinar.",
+            similarity: 0.45,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    if (fnName === "match_knowledge_chunks_lexical") {
+      return {
+        data: [
+          {
+            document_id: "doc-rdpm",
+            chunk_index: 2,
+            content: "[METADATA:{\"sourceDocument\":\"regulamento_disciplinar_rdpm.pdf\"}]\nAs transgressões disciplinares no regulamento disciplinar RDPM.",
+            similarity: 0.90,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Segundo o RDPM", 5, 0.15);
+
+    assert.ok(results.length >= 1);
+    // RDPM document should be prioritized
+    assert.strictEqual(results[0].documentId, "doc-rdpm");
+    assert.ok(results[0].metadata?.sourceDocument?.includes("rdpm"));
+  } finally {
+    supabase.rpc = originalRpc;
+  }
+});
+
+test("SearchService - Hybrid Search: Semantic Query maintains semantic search benefits", async () => {
+  const originalRpc = supabase.rpc;
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      // Vector search matches semantic meaning beautifully
+      return {
+        data: [
+          {
+            document_id: "doc-proc-adm",
+            chunk_index: 15,
+            content: "[METADATA:{\"sourceDocument\":\"rito_sumario.pdf\"}]\nA sindicância e o processo de rito sumário apuram infrações na corporação.",
+            similarity: 0.88,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    if (fnName === "match_knowledge_chunks_lexical") {
+      // Lexical search doesn't find exact phrase matching well, or returns lower similarity
+      return {
+        data: [],
+        error: null,
+      } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Como funciona o processo administrativo disciplinar?", 5, 0.15);
+
+    assert.ok(results.length >= 1);
+    // The semantic search should ensure we still get our relevant chunk
+    assert.strictEqual(results[0].documentId, "doc-proc-adm");
+    assert.ok(results[0].score > 0);
+  } finally {
+    supabase.rpc = originalRpc;
+  }
+});
+
+test("SearchService - Hybrid Search: Literal Textual Query 'licença médica' uses lexical search", async () => {
+  const originalRpc = supabase.rpc;
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      // Vector matches are somewhat low or general
+      return {
+        data: [
+          {
+            document_id: "doc-generic",
+            chunk_index: 1,
+            content: "[METADATA:{\"sourceDocument\":\"geral.pdf\"}]\nAspectos de saúde ocupacional do servidor.",
+            similarity: 0.40,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    if (fnName === "match_knowledge_chunks_lexical") {
+      // Lexical match has the exact phrase "licença médica"
+      return {
+        data: [
+          {
+            document_id: "doc-licenca",
+            chunk_index: 4,
+            content: "[METADATA:{\"sourceDocument\":\"afastamentos.pdf\"}]\nA licença médica para tratamento de saúde deve ser concedida pelo serviço médico.",
+            similarity: 0.95,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("licença médica", 5, 0.15);
+
+    assert.ok(results.length >= 1);
+    // Exact match for "licença médica" should be on top
+    assert.strictEqual(results[0].documentId, "doc-licenca");
+    assert.ok(results[0].text.includes("licença médica"));
   } finally {
     supabase.rpc = originalRpc;
   }

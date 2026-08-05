@@ -4,6 +4,13 @@ import { createEmbedding } from "../groq/embed.js";
 import { logger } from "./logger.service.js";
 import { metricsService } from "./metrics.service.js";
 
+// Configurable constants for Hybrid Search (PR 4)
+export const HYBRID_VECTOR_WEIGHT = 0.7;
+export const HYBRID_LEXICAL_WEIGHT = 0.3;
+export const HYBRID_MIN_VECTOR_SCORE = 0.15;
+export const HYBRID_MIN_LEXICAL_SCORE = 0.01;
+export const HYBRID_MAX_RESULTS = 10;
+
 const EXPLICIT_DOC_BOOST = 0.25;
 const METADATA_QUALITY_BOOST = 0.08;
 const DIVERSITY_PENALTY_FACTOR = 0.08;
@@ -17,6 +24,31 @@ function normalizeQuery(text: string): string {
     .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, " ") // replace punctuation, hyphens, underscores with space
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/**
+ * Computes a high-quality lexical similarity score (0 to 1) in JavaScript
+ * as a robust fallback mechanism for full text matching queries.
+ */
+function computeFallbackLexicalScore(text: string, query: string): number {
+  const normText = normalizeQuery(text);
+  const normQuery = normalizeQuery(query);
+  if (!normQuery || !normText) return 0;
+
+  const queryWords = normQuery.split(/\s+/).filter(w => w.length >= 2);
+  if (queryWords.length === 0) return 0;
+
+  let matchCount = 0;
+  for (const word of queryWords) {
+    if (normText.includes(word)) {
+      matchCount++;
+      // Give a tiny boost for exact multiple occurrences of key terms
+      const occurrences = (normText.match(new RegExp(word, "g")) || []).length;
+      matchCount += Math.min(occurrences - 1, 3) * 0.05;
+    }
+  }
+
+  return Math.min(matchCount / queryWords.length, 1.0);
 }
 
 function getFilenameAliases(fileName: string): string[] {
@@ -140,19 +172,22 @@ export interface SearchResultItem {
     chunkIndex?: number;
     totalChunks?: number;
     createdAt?: string;
+    vectorScore?: number;
+    lexicalScore?: number;
     [key: string]: any;
   };
 }
 
 export class SearchService {
   /**
-   * Performs semantic search using pgvector.
+   * Performs hybrid search combining semantic search (pgvector) and lexical search
+   * (Postgres Full Text Search using websearch_to_tsquery).
    *
    * @param queryText - Search question
    * @param topK - Maximum number of results (default env.DEFAULT_TOP_K)
    * @param scoreThreshold - Minimum similarity score (default env.DEFAULT_MIN_SCORE)
    * @param filters - Optional filters (documentId, category, documentType)
-   * @returns List of matching results sorted by similarity descending
+   * @returns List of matching results sorted by composite score descending
    */
   static async search(
     queryText: string,
@@ -172,7 +207,6 @@ export class SearchService {
     // 1. Resolve metadata filters
     let activeDocumentIdFilters: string[] | null = null;
 
-    // Combine with specific documentId filter if provided
     if (filters?.documentId) {
       activeDocumentIdFilters = [filters.documentId];
     } else if (filters?.documentIds && filters.documentIds.length > 0) {
@@ -235,83 +269,150 @@ export class SearchService {
       }
     }
 
-    // 4. Query pgvector via match_documents RPC (with fallback to match_knowledge_chunks)
-    // Increase raw candidate limit to Math.max(topK * 6, 60) for a rich, diverse candidate pool.
+    // 4. Parallel Execution of Vector and Lexical searches to minimize latency
     const rawLimit = Math.max(topK * 6, 60);
 
-    console.log(`[SEARCH] Consulta RPC utilizada: rpc("match_documents", { query_embedding: [array de dimensão ${finalEmbedding.length}], match_count: ${rawLimit} })`);
-    console.log(`[SEARCH] Filtros ativos: Não existem filtros por tenant, organização, usuário ou status que eliminem registros na tabela ou na RPC.`);
-
-    let dbQuery = supabase.rpc("match_documents", {
+    // 4.1. Define Vector search query
+    let vectorQuery = supabase.rpc("match_documents", {
       query_embedding: finalEmbedding,
       match_count: rawLimit,
     });
 
     if (activeDocumentIdFilters !== null) {
-      console.log(`[SEARCH] Aplicando filtro PostgREST de document_id: ${JSON.stringify(activeDocumentIdFilters)}`);
       if (activeDocumentIdFilters.length === 1) {
-        dbQuery = dbQuery.eq("document_id", activeDocumentIdFilters[0]);
+        vectorQuery = vectorQuery.eq("document_id", activeDocumentIdFilters[0]);
       } else {
-        dbQuery = dbQuery.in("document_id", activeDocumentIdFilters);
+        vectorQuery = vectorQuery.in("document_id", activeDocumentIdFilters);
       }
     }
 
-    let rawResults: any[] | null = null;
-    let rpcError: any = null;
+    // 4.2. Define Lexical (FTS) search query
+    let lexicalQuery = supabase.rpc("match_knowledge_chunks_lexical", {
+      query_text: queryText,
+      match_count: rawLimit,
+    });
 
-    try {
-      const response = await dbQuery;
-      if (response.error) {
-        rpcError = response.error;
+    if (activeDocumentIdFilters !== null) {
+      if (activeDocumentIdFilters.length === 1) {
+        lexicalQuery = lexicalQuery.eq("document_id", activeDocumentIdFilters[0]);
       } else {
-        rawResults = response.data;
+        lexicalQuery = lexicalQuery.in("document_id", activeDocumentIdFilters);
       }
-    } catch (err: any) {
-      rpcError = err;
     }
 
-    // Fallback if match_documents failed
-    if (rpcError) {
-      console.warn(`[SEARCH] RPC 'match_documents' falhou ou não existe (${rpcError.message || rpcError}). Tentando fallback para 'match_knowledge_chunks'...`);
-      let fallbackQuery = supabase.rpc("match_knowledge_chunks", {
+    // 4.3. Run both parallelly using Promise.allSettled
+    console.log(`[SEARCH] Executando busca vetorial e busca lexical em paralelo...`);
+    const [vectorRes, lexicalRes] = await Promise.allSettled([
+      vectorQuery,
+      lexicalQuery,
+    ]);
+
+    // 4.4. Handle Vector result or its fallback
+    let rawVectorResults: any[] = [];
+    if (vectorRes.status === "fulfilled" && !vectorRes.value.error) {
+      rawVectorResults = vectorRes.value.data || [];
+    } else {
+      const rpcError = vectorRes.status === "fulfilled" ? vectorRes.value.error : vectorRes.reason;
+      console.warn(`[SEARCH] RPC 'match_documents' falhou ou não existe. Tentando fallback para 'match_knowledge_chunks'...`);
+
+      let fallbackVecQuery = supabase.rpc("match_knowledge_chunks", {
         query_embedding: finalEmbedding,
         match_count: rawLimit,
       });
 
       if (activeDocumentIdFilters !== null) {
         if (activeDocumentIdFilters.length === 1) {
-          fallbackQuery = fallbackQuery.eq("document_id", activeDocumentIdFilters[0]);
+          fallbackVecQuery = fallbackVecQuery.eq("document_id", activeDocumentIdFilters[0]);
         } else {
-          fallbackQuery = fallbackQuery.in("document_id", activeDocumentIdFilters);
+          fallbackVecQuery = fallbackVecQuery.in("document_id", activeDocumentIdFilters);
         }
       }
 
       try {
-        const response = await fallbackQuery;
+        const response = await fallbackVecQuery;
         if (response.error) {
           throw response.error;
         } else {
-          rawResults = response.data;
-          rpcError = null; // Cleared since fallback succeeded
+          rawVectorResults = response.data || [];
         }
       } catch (fallbackErr: any) {
         throw new Error(`Erro na busca vetorial por RPC (tanto match_documents quanto match_knowledge_chunks falharam): ${fallbackErr.message || fallbackErr}`);
       }
     }
 
-    const results = (rawResults as any[]) || [];
-    console.log(`[SEARCH] Resultados brutos retornados pela RPC (${results.length}):`);
+    // 4.5. Handle Lexical result or its fallback
+    let rawLexicalResults: any[] = [];
+    let usedLexicalFallback = false;
 
-    // 5. Post-process: extract clean text, parse metadata, apply similarity threshold, then apply boosts & diversity penalty
-    const candidateResults: SearchResultItem[] = [];
-    const seenTexts = new Set<string>();
+    if (lexicalRes.status === "fulfilled" && !lexicalRes.value.error) {
+      rawLexicalResults = lexicalRes.value.data || [];
+    } else {
+      const rpcError = lexicalRes.status === "fulfilled" ? lexicalRes.value.error : lexicalRes.reason;
+      console.warn(`[SEARCH] RPC 'match_knowledge_chunks_lexical' falhou ou não existe (${rpcError?.message || rpcError}). Tentando fallback para .textSearch() na tabela...`);
+      usedLexicalFallback = true;
 
-    for (let idx = 0; idx < results.length; idx++) {
-      const item = results[idx];
+      try {
+        let fallbackQuery = supabase
+          .from("knowledge_chunks")
+          .select("id, document_id, chunk_index, content")
+          .textSearch("content", queryText, { config: "portuguese", type: "websearch" })
+          .limit(rawLimit);
+
+        if (activeDocumentIdFilters !== null) {
+          if (activeDocumentIdFilters.length === 1) {
+            fallbackQuery = fallbackQuery.eq("document_id", activeDocumentIdFilters[0]);
+          } else {
+            fallbackQuery = fallbackQuery.in("document_id", activeDocumentIdFilters);
+          }
+        }
+
+        const resp = await fallbackQuery;
+        if (resp.error) {
+          throw resp.error;
+        } else {
+          rawLexicalResults = (resp.data || []).map((item: any) => {
+            const similarity = computeFallbackLexicalScore(item.content || "", queryText);
+            return {
+              id: item.id,
+              document_id: item.document_id,
+              chunk_index: item.chunk_index,
+              content: item.content,
+              similarity,
+            };
+          });
+        }
+      } catch (fallbackErr: any) {
+        console.warn(`[SEARCH] Fallback lexical falhou: ${fallbackErr.message || fallbackErr}. Prosseguindo apenas com busca vetorial.`);
+      }
+    }
+
+    // 5. Fusion of Results: deduplicate, combine scores, maintain diversity
+    interface ChunkCandidate {
+      id: string;
+      documentId: string;
+      chunkIndex: number;
+      content: string;
+      cleanText: string;
+      metadata: any;
+      filename: string;
+      vectorScore: number;
+      lexicalScore: number;
+    }
+
+    const candidateMap = new Map<string, ChunkCandidate>();
+
+    // 5.1. Process Vector search contributors
+    for (const item of rawVectorResults) {
       if (!item) continue;
-      const originalScore = item.similarity ?? 0;
+      const vScore = item.similarity ?? 0;
 
-      // Extract clean text and parse embedded metadata block
+      // Filter by vector score threshold (use strict scoreThreshold parameter)
+      if (vScore < scoreThreshold) {
+        continue;
+      }
+
+      const key = `${item.document_id}_${item.chunk_index}`;
+
       let cleanText = item.content ?? "";
       let metadata: any = {};
       const metaMatch = cleanText.match(/^\[METADATA:([\s\S]*?)\]\n([\s\S]*)$/);
@@ -327,72 +428,139 @@ export class SearchService {
 
       const filename = documentNamesMap.get(item.document_id) || metadata.sourceDocument || "Desconhecido";
 
-      console.log(`  - Resultado ${idx + 1}: chunk_id=${item.id}, document_id=${item.document_id}, similarity=${originalScore}, scoreThreshold=${scoreThreshold}`);
+      candidateMap.set(key, {
+        id: item.id,
+        documentId: item.document_id,
+        chunkIndex: item.chunk_index ?? 0,
+        content: item.content ?? "",
+        cleanText,
+        metadata,
+        filename,
+        vectorScore: vScore,
+        lexicalScore: 0,
+      });
+    }
 
-      // ENFORCE SCORE THRESHOLD on the original similarity score to filter out irrelevant candidates before boosting
-      if (originalScore < scoreThreshold) {
-        console.log(`    [THRESHOLD FILTER] Descartado: score original ${originalScore} é menor que o threshold mínimo ${scoreThreshold} para texto: "${cleanText.substring(0, 30)}..."`);
+    // 5.2. Process Lexical search contributors
+    for (const item of rawLexicalResults) {
+      if (!item) continue;
+      const lScore = item.similarity ?? 0;
+
+      // Filter by lexical score threshold
+      if (lScore < HYBRID_MIN_LEXICAL_SCORE) {
         continue;
       }
 
-      const textKey = (cleanText ?? "").toLowerCase();
+      const key = `${item.document_id}_${item.chunk_index}`;
+      const existing = candidateMap.get(key);
 
-      // Deduplicate
-      if (!seenTexts.has(textKey)) {
-        seenTexts.add(textKey);
-
-        // Apply Boosting
-        let finalScore = originalScore;
-        const reasons: string[] = [];
-
-        // 5.1. Explicit Document Boost (+0.25)
-        if (isDocumentExplicitlyMentioned(queryText, filename)) {
-          finalScore += EXPLICIT_DOC_BOOST;
-          reasons.push(`Explicit mention of document: "${filename}" (+${EXPLICIT_DOC_BOOST})`);
+      if (existing) {
+        existing.lexicalScore = Math.max(existing.lexicalScore, lScore);
+      } else {
+        let cleanText = item.content ?? "";
+        let metadata: any = {};
+        const metaMatch = cleanText.match(/^\[METADATA:([\s\S]*?)\]\n([\s\S]*)$/);
+        if (metaMatch) {
+          try {
+            metadata = JSON.parse(metaMatch[1]);
+          } catch (e: any) {
+            console.error(`[SEARCH] Erro ao fazer o parse do JSON de metadados do chunk: ${e.message}`);
+          }
+          cleanText = metaMatch[2] ?? "";
         }
+        cleanText = cleanText.trim();
 
-        // 5.2. Metadata Quality Boost (+0.08)
-        if (hasQualityMetadata(cleanText, metadata)) {
-          finalScore += METADATA_QUALITY_BOOST;
-          reasons.push(`High metadata quality (+${METADATA_QUALITY_BOOST})`);
-        }
+        const filename = documentNamesMap.get(item.document_id) || metadata.sourceDocument || "Desconhecido";
 
-        candidateResults.push({
+        candidateMap.set(key, {
+          id: item.id,
           documentId: item.document_id,
           chunkIndex: item.chunk_index ?? 0,
-          score: finalScore,
-          text: cleanText,
-          metadata: {
-            ...metadata,
-            sourceDocument: filename,
-            originalScore,
-            reasons,
-          },
+          content: item.content ?? "",
+          cleanText,
+          metadata,
+          filename,
+          vectorScore: 0,
+          lexicalScore: lScore,
         });
-      } else {
-        console.log(`    [DEDUPLICATE FILTER] Descartado por texto duplicado: "${cleanText.substring(0, 30)}..."`);
       }
     }
 
-    // 6. Apply Greedy Document Diversity Re-ranking using DIVERSITY_PENALTY_FACTOR
-    // Penalize subsequent chunks from the same document (each subsequent chunk receives a penalty of DIVERSITY_PENALTY_FACTOR * documentCount).
+    // 5.3. Text-based Deduplication preserving the maximum score
+    const uniqueTextCandidates = new Map<string, ChunkCandidate>();
+
+    for (const cand of candidateMap.values()) {
+      const textKey = cand.cleanText.toLowerCase().trim();
+      const candCombinedRawScore = (cand.vectorScore * HYBRID_VECTOR_WEIGHT) + (cand.lexicalScore * HYBRID_LEXICAL_WEIGHT);
+
+      const existing = uniqueTextCandidates.get(textKey);
+      if (existing) {
+        const existingCombinedRawScore = (existing.vectorScore * HYBRID_VECTOR_WEIGHT) + (existing.lexicalScore * HYBRID_LEXICAL_WEIGHT);
+        if (candCombinedRawScore > existingCombinedRawScore) {
+          uniqueTextCandidates.set(textKey, cand);
+        }
+      } else {
+        uniqueTextCandidates.set(textKey, cand);
+      }
+    }
+
+    // 5.4. Calculate Composite Ranking Score and Apply Boosts
+    const finalCandidates: SearchResultItem[] = [];
+
+    for (const cand of uniqueTextCandidates.values()) {
+      const combinedRawScore = (cand.vectorScore * HYBRID_VECTOR_WEIGHT) + (cand.lexicalScore * HYBRID_LEXICAL_WEIGHT);
+
+      let finalScore = combinedRawScore;
+      const reasons: string[] = [];
+
+      reasons.push(`Base Vetorial: ${(cand.vectorScore * HYBRID_VECTOR_WEIGHT).toFixed(4)} (peso ${HYBRID_VECTOR_WEIGHT})`);
+      reasons.push(`Base Lexical: ${(cand.lexicalScore * HYBRID_LEXICAL_WEIGHT).toFixed(4)} (peso ${HYBRID_LEXICAL_WEIGHT})`);
+
+      // 5.4.1. Explicit Document Boost (+0.25)
+      if (isDocumentExplicitlyMentioned(queryText, cand.filename)) {
+        finalScore += EXPLICIT_DOC_BOOST;
+        reasons.push(`Explicit mention of document: "${cand.filename}" (+${EXPLICIT_DOC_BOOST})`);
+      }
+
+      // 5.4.2. Metadata Quality Boost (+0.08)
+      if (hasQualityMetadata(cand.cleanText, cand.metadata)) {
+        finalScore += METADATA_QUALITY_BOOST;
+        reasons.push(`High metadata quality (+${METADATA_QUALITY_BOOST})`);
+      }
+
+      finalCandidates.push({
+        documentId: cand.documentId,
+        chunkIndex: cand.chunkIndex,
+        score: finalScore,
+        text: cand.cleanText,
+        metadata: {
+          ...cand.metadata,
+          sourceDocument: cand.filename,
+          originalScore: combinedRawScore,
+          vectorScore: cand.vectorScore,
+          lexicalScore: cand.lexicalScore,
+          reasons,
+        },
+      });
+    }
+
+    // 6. Greedy Document Diversity Re-ranking using DIVERSITY_PENALTY_FACTOR
     const dynamicResults: SearchResultItem[] = [];
     const docCounts = new Map<string, number>();
 
-    // Sort by final score descending first
-    candidateResults.sort((a, b) => b.score - a.score);
+    // Sort by composite final score descending first
+    finalCandidates.sort((a, b) => b.score - a.score);
 
-    while (candidateResults.length > 0) {
-      // Re-sort candidateResults on each iteration because penalty applications may dynamically shift ranks
-      candidateResults.sort((a, b) => b.score - a.score);
-      const chosen = candidateResults.shift()!;
+    while (finalCandidates.length > 0) {
+      finalCandidates.sort((a, b) => b.score - a.score);
+      const chosen = finalCandidates.shift()!;
       dynamicResults.push(chosen);
 
       const docId = chosen.documentId;
       docCounts.set(docId, (docCounts.get(docId) ?? 0) + 1);
 
       // Penalize remaining candidates from the same document
-      for (const item of candidateResults) {
+      for (const item of finalCandidates) {
         if (item.documentId === docId) {
           item.score -= DIVERSITY_PENALTY_FACTOR;
           if (item.metadata) {
@@ -402,29 +570,55 @@ export class SearchService {
       }
     }
 
-    // Enforce final order sorted by score descending
+    // Sort results by score descending again
     dynamicResults.sort((a, b) => b.score - a.score);
 
     // Limit output results strictly to topK
     const uniqueResults = dynamicResults.slice(0, topK);
 
-    // Development-only logging of detailed scoring and boost reasoning
+    // 7. Structured Development Logs tracing search operations using down arrows (↓)
     if (env.NODE_ENV === "development" || !isTest) {
-      console.log(`[RETRIEVAL AUDIT] Query: "${queryText}"`);
+      console.log(`\nConsulta: "${queryText}"\n`);
+      console.log(`↓\n`);
+
+      console.log(`Resultados Vetoriais (${rawVectorResults.length}):`);
+      rawVectorResults.forEach((res, i) => {
+        console.log(`  - Resultado ${i+1}: chunk_id=${res.id || "N/A"}, document_id=${res.document_id}, similarity=${(res.similarity ?? 0).toFixed(4)}, scoreThreshold=${scoreThreshold}`);
+      });
+      console.log(`\n↓\n`);
+
+      console.log(`Resultados Lexicais (${rawLexicalResults.length})${usedLexicalFallback ? " [Fallback JS]" : ""}:`);
+      rawLexicalResults.forEach((res, i) => {
+        console.log(`  - Resultado ${i+1}: chunk_id=${res.id || "N/A"}, document_id=${res.document_id}, similarity=${(res.similarity ?? 0).toFixed(4)}, scoreThreshold=${HYBRID_MIN_LEXICAL_SCORE}`);
+      });
+      console.log(`\n↓\n`);
+
+      console.log(`Resultados Mesclados (Deduplicados e Fundidos):`);
+      uniqueTextCandidates.forEach((cand, key) => {
+        const combinedRaw = (cand.vectorScore * HYBRID_VECTOR_WEIGHT) + (cand.lexicalScore * HYBRID_LEXICAL_WEIGHT);
+        console.log(`  - Chunk ${key}: vector=${cand.vectorScore.toFixed(4)}, lexical=${cand.lexicalScore.toFixed(4)}, combined=${combinedRaw.toFixed(4)}`);
+      });
+      console.log(`\n↓\n`);
+
+      console.log(`Ranking Final (Com boosts de documento e metadados, e penalidade de diversidade):`);
       uniqueResults.forEach((res, i) => {
         const metadata = res.metadata || {};
-        const page = metadata.pageNumber ?? "N/A";
-        const orig = metadata.originalScore ?? res.score;
-        const final = res.score;
         const reasonsStr = metadata.reasons && metadata.reasons.length > 0 ? metadata.reasons.join(", ") : "None";
-        console.log(`  [Rank ${i+1}] Document: ${metadata.sourceDocument || "Desconhecido"} | Page: ${page}`);
-        console.log(`    Original Score: ${orig.toFixed(4)} -> Final Score: ${final.toFixed(4)}`);
-        console.log(`    Boost Reasons: ${reasonsStr}`);
+        console.log(`  [Rank ${i+1}] Document: ${metadata.sourceDocument || "Desconhecido"} | Page: ${metadata.pageNumber ?? "N/A"}`);
+        console.log(`    Original Score: ${(metadata.originalScore ?? res.score).toFixed(4)} -> Final Score: ${res.score.toFixed(4)}`);
+        console.log(`    Boost Reasons / Score Motivations: ${reasonsStr}`);
         console.log(`    Snippet: "${res.text.substring(0, 80)}..."`);
       });
+      console.log(`\n↓\n`);
+
+      console.log(`Top K enviados ao Context Builder (${uniqueResults.length}):`);
+      uniqueResults.forEach((res, i) => {
+        console.log(`  - Rank ${i+1}: "${res.text.substring(0, 50)}..." [Score: ${res.score.toFixed(4)}]`);
+      });
+      console.log(`\n`);
     }
 
-    // 5. Compute metrics and structured log
+    // 8. Compute metrics and structured log
     const durationMs = performance.now() - startTime;
     const count = uniqueResults.length;
     const avgScore = count > 0 ? uniqueResults.reduce((sum, r) => sum + r.score, 0) / count : 0;
@@ -444,7 +638,7 @@ export class SearchService {
     averageScore: number,
     consultedDocuments: string[]
   ): void {
-    logger.info("Busca semântica realizada com sucesso", {
+    logger.info("Busca híbrida (semântica + lexical) realizada com sucesso", {
       searchDurationMs: parseFloat(durationMs.toFixed(2)),
       resultsCount: count,
       averageScore: parseFloat(averageScore.toFixed(4)),
