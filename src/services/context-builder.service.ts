@@ -84,6 +84,30 @@ export function extractMetadataFromText(text: string): {
 /**
  * Compares two article strings numerically first, falling back to lexicographical comparison.
  */
+/**
+ * Computes Jaccard word similarity between two texts.
+ */
+export function computeJaccardSimilarity(text1: string, text2: string): number {
+  if (!text1 || !text2) return 0;
+
+  const cleanWord = (w: string) => w.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, "");
+  const STOP_WORDS = new Set(["de", "do", "da", "o", "a", "os", "as", "em", "no", "na", "um", "uma", "com", "por", "para", "se", "ou", "e"]);
+
+  const words1 = new Set(text1.split(/\s+/).map(cleanWord).filter(w => w.length >= 2 && !STOP_WORDS.has(w)));
+  const words2 = new Set(text2.split(/\s+/).map(cleanWord).filter(w => w.length >= 2 && !STOP_WORDS.has(w)));
+
+  if (words1.size === 0 || words2.size === 0) return 0;
+
+  let intersection = 0;
+  for (const w of words1) {
+    if (words2.has(w)) {
+      intersection++;
+    }
+  }
+  const union = words1.size + words2.size - intersection;
+  return intersection / union;
+}
+
 export function compareArticles(aStr?: string, bStr?: string): number {
   if (!aStr && !bStr) return 0;
   if (!aStr) return 1; // place chunks without article at the end
@@ -103,6 +127,49 @@ export function compareArticles(aStr?: string, bStr?: string): number {
 }
 
 export class ContextBuilderService {
+  /**
+   * Merges consecutive chunks belonging to the same document and article to preserve logical sequence.
+   */
+  static mergeConsecutiveChunks(chunks: ContextChunkInput[]): ContextChunkInput[] {
+    if (chunks.length === 0) return [];
+
+    const merged: ContextChunkInput[] = [];
+
+    for (const chunk of chunks) {
+      if (merged.length === 0) {
+        merged.push({ ...chunk });
+        continue;
+      }
+
+      const last = merged[merged.length - 1];
+
+      const sameDoc = last.documentId === chunk.documentId;
+      const isConsecutiveIndex = chunk.chunkIndex === last.chunkIndex + 1;
+      const sameArticle = !!(last.article && chunk.article && last.article.trim().toLowerCase() === chunk.article.trim().toLowerCase());
+      const bothNoArticle = !last.article && !chunk.article;
+
+      if (sameDoc && isConsecutiveIndex && (sameArticle || bothNoArticle)) {
+        // Merge text contents preserving single continuous sequence
+        last.text = last.text.trim() + "\n" + chunk.text.trim();
+        // Keep the latest chunk index to support consecutive merge propagation
+        last.chunkIndex = chunk.chunkIndex;
+
+        // Merge page numbers uniquely
+        if (chunk.page && last.page !== chunk.page) {
+          const pageStr = String(last.page);
+          const chunkPageStr = String(chunk.page);
+          if (!pageStr.includes(chunkPageStr)) {
+            last.page = `${pageStr}, ${chunkPageStr}`;
+          }
+        }
+      } else {
+        merged.push({ ...chunk });
+      }
+    }
+
+    return merged;
+  }
+
   /**
    * Helper to format a single chunk using a clean, structured uppercase layout.
    */
@@ -156,22 +223,64 @@ export class ContextBuilderService {
    */
   static buildContextDetailed(
     chunks: ContextChunkInput[],
-    maxContextSize: number = env.DEFAULT_MAX_CONTEXT_SIZE
+    maxContextSize: number = env.MAX_CONTEXT_SIZE
   ): DetailedContextResult {
+    const builderStart = performance.now();
     if (!chunks || chunks.length === 0) {
       return { context: "", selectedChunks: [] };
     }
 
-    // 1. Eliminate duplicates by lowercased, trimmed text content
+    // 1. Eliminate duplicates and highly overlapping chunks (PR 5)
     const uniqueChunks: ContextChunkInput[] = [];
-    const seenTexts = new Set<string>();
+    const removedChunksLog: Array<{ text: string, reason: string }> = [];
 
     for (const chunk of chunks) {
-      const normalizedText = (chunk?.text ?? "").trim().toLowerCase();
-      if (!seenTexts.has(normalizedText)) {
-        seenTexts.add(normalizedText);
-        uniqueChunks.push(chunk);
+      if (!chunk) continue;
+      const normalizedText = (chunk.text ?? "").trim().toLowerCase();
+
+      // 1.1. Check for strict duplicate
+      let isStrictDuplicate = false;
+      for (const accepted of uniqueChunks) {
+        if ((accepted.text ?? "").trim().toLowerCase() === normalizedText) {
+          isStrictDuplicate = true;
+          break;
+        }
       }
+
+      if (isStrictDuplicate) {
+        removedChunksLog.push({
+          text: chunk.text,
+          reason: "Duplicado estrito"
+        });
+        continue;
+      }
+
+      // 1.2. Check for high overlap using Jaccard Similarity
+      let isHighlyOverlapping = false;
+      let overlappingWithText = "";
+      let highestOverlap = 0;
+
+      for (const accepted of uniqueChunks) {
+        const sim = computeJaccardSimilarity(accepted.text ?? "", chunk.text ?? "");
+        if (sim > highestOverlap) {
+          highestOverlap = sim;
+          overlappingWithText = accepted.text ?? "";
+        }
+        if (sim > env.MAX_OVERLAP_THRESHOLD) {
+          isHighlyOverlapping = true;
+          break;
+        }
+      }
+
+      if (isHighlyOverlapping) {
+        removedChunksLog.push({
+          text: chunk.text,
+          reason: `Sobreposição alta (${(highestOverlap * 100).toFixed(1)}% de similaridade Jaccard com: "${overlappingWithText.substring(0, 40)}...")`
+        });
+        continue;
+      }
+
+      uniqueChunks.push(chunk);
     }
 
     // 2. Enrich metadata from parsed JSON or regex fallbacks
@@ -224,52 +333,119 @@ export class ContextBuilderService {
       return nameA.localeCompare(nameB);
     });
 
-    // 5. Balanced round-robin selection
-    const indices: Record<string, number> = {};
-    for (const docId of docIds) {
-      indices[docId] = 0;
+    // 5. Selection with Controlled Diversity (PR 5)
+    const selectedChunks: ContextChunkInput[] = [];
+
+    // Calculate maximum score per document to determine score gap
+    const docMaxScores: Record<string, number> = {};
+    for (const chunk of enrichedChunks) {
+      const docId = chunk.documentId;
+      const score = chunk.score ?? chunk.metadata?.originalScore ?? chunk.metadata?.rrfScore ?? 0;
+      if (docMaxScores[docId] === undefined || score > docMaxScores[docId]) {
+        docMaxScores[docId] = score;
+      }
     }
 
-    const selectedChunks: ContextChunkInput[] = [];
-    let hasMore = true;
+    const sortedDocIdsByScore = Object.keys(docMaxScores).sort((a, b) => docMaxScores[b] - docMaxScores[a]);
+    const bestDocId = sortedDocIdsByScore[0];
+    const secondBestDocId = sortedDocIdsByScore[1];
 
-    while (hasMore) {
-      hasMore = false;
+    const bestDocScore = bestDocId ? docMaxScores[bestDocId] : 0;
+    const secondBestDocScore = secondBestDocId ? docMaxScores[secondBestDocId] : 0;
+    const gap = bestDocScore - secondBestDocScore;
+
+    const isSingleDocDominant = sortedDocIdsByScore.length > 1 && gap > env.DIVERSITY_SCORE_GAP;
+    let selectedMode = "Round-robin Proporcional";
+
+    if (isSingleDocDominant) {
+      selectedMode = "Documento Único Dominante";
+      if (env.NODE_ENV === "development") {
+        console.log(`[CONTEXT_BUILDER] Documento dominante detectado ("${docGroups[bestDocId][0]?.documentName || "Desconhecido"}", score: ${bestDocScore.toFixed(4)} vs segundo: ${secondBestDocScore.toFixed(4)}, gap: ${gap.toFixed(4)} > ${env.DIVERSITY_SCORE_GAP}). Ignorando round-robin.`);
+      }
+
+      // Single dominant document: select strictly by descending chunk score to prevent dispersion
+      for (const chunk of enrichedChunks) {
+        const tempSelected = [...selectedChunks, chunk];
+
+        const tempGroupedSelected: Record<string, ContextChunkInput[]> = {};
+        for (const s of tempSelected) {
+          if (!tempGroupedSelected[s.documentId]) {
+            tempGroupedSelected[s.documentId] = [];
+          }
+          tempGroupedSelected[s.documentId].push(s);
+        }
+
+        for (const dId of Object.keys(tempGroupedSelected)) {
+          tempGroupedSelected[dId].sort((a, b) => {
+            const artComp = compareArticles(a.article, b.article);
+            if (artComp !== 0) return artComp;
+            return a.chunkIndex - b.chunkIndex;
+          });
+        }
+
+        const candidateChunks: ContextChunkInput[] = [];
+        for (const dId of docIds) {
+          if (tempGroupedSelected[dId]) {
+            candidateChunks.push(...tempGroupedSelected[dId]);
+          }
+        }
+
+        const candidateContext = this.joinFormattedChunks(candidateChunks);
+        if (candidateContext.length <= maxContextSize) {
+          selectedChunks.push(chunk);
+        }
+      }
+    } else {
+      if (env.NODE_ENV === "development" && sortedDocIdsByScore.length > 1) {
+        console.log(`[CONTEXT_BUILDER] Alternativas relevantes detectadas (gap: ${gap.toFixed(4)} <= ${env.DIVERSITY_SCORE_GAP}). Usando round-robin proporcional.`);
+      }
+
+      // Multiple relevant alternatives: use balanced round-robin selection
+      const indices: Record<string, number> = {};
       for (const docId of docIds) {
-        const group = docGroups[docId];
-        const idx = indices[docId];
-        if (idx < group.length) {
-          const chunk = group[idx];
+        indices[docId] = 0;
+      }
 
-          // Test candidate context with this chunk added
-          const tempSelected = [...selectedChunks, chunk];
+      let hasMore = true;
 
-          // To maintain proper grouping, group the tempSelected chunks by document first
-          const tempGroupedSelected: Record<string, ContextChunkInput[]> = {};
-          for (const s of tempSelected) {
-            if (!tempGroupedSelected[s.documentId]) {
-              tempGroupedSelected[s.documentId] = [];
+      while (hasMore) {
+        hasMore = false;
+        for (const docId of docIds) {
+          const group = docGroups[docId];
+          const idx = indices[docId];
+          if (idx < group.length) {
+            const chunk = group[idx];
+
+            // Test candidate context with this chunk added
+            const tempSelected = [...selectedChunks, chunk];
+
+            // To maintain proper grouping, group the tempSelected chunks by document first
+            const tempGroupedSelected: Record<string, ContextChunkInput[]> = {};
+            for (const s of tempSelected) {
+              if (!tempGroupedSelected[s.documentId]) {
+                tempGroupedSelected[s.documentId] = [];
+              }
+              tempGroupedSelected[s.documentId].push(s);
             }
-            tempGroupedSelected[s.documentId].push(s);
-          }
 
-          // Build ordered list of candidate chunks
-          const candidateChunks: ContextChunkInput[] = [];
-          for (const dId of docIds) {
-            if (tempGroupedSelected[dId]) {
-              candidateChunks.push(...tempGroupedSelected[dId]);
+            // Build ordered list of candidate chunks
+            const candidateChunks: ContextChunkInput[] = [];
+            for (const dId of docIds) {
+              if (tempGroupedSelected[dId]) {
+                candidateChunks.push(...tempGroupedSelected[dId]);
+              }
             }
-          }
 
-          const candidateContext = this.joinFormattedChunks(candidateChunks);
-          if (candidateContext.length <= maxContextSize) {
-            selectedChunks.push(chunk);
-            indices[docId] = idx + 1;
-            hasMore = true;
-          } else {
-            // Keep index advancing so we do not freeze, but do not add the chunk that overflows
-            indices[docId] = idx + 1;
-            hasMore = true;
+            const candidateContext = this.joinFormattedChunks(candidateChunks);
+            if (candidateContext.length <= maxContextSize) {
+              selectedChunks.push(chunk);
+              indices[docId] = idx + 1;
+              hasMore = true;
+            } else {
+              // Keep index advancing so we do not freeze, but do not add the chunk that overflows
+              indices[docId] = idx + 1;
+              hasMore = true;
+            }
           }
         }
       }
@@ -291,13 +467,33 @@ export class ContextBuilderService {
       }
     }
 
-    const context = this.joinFormattedChunks(finalOrderedChunks);
+    // Merge consecutive chunks (PR 5)
+    const mergedChunks = this.mergeConsecutiveChunks(finalOrderedChunks);
+
+    const context = this.joinFormattedChunks(mergedChunks);
 
     // 7. Structured Debug Logs Only (omits chunk text)
     const totalChunksBefore = chunks.length;
-    const discardedCount = totalChunksBefore - finalOrderedChunks.length;
+    const discardedCount = totalChunksBefore - mergedChunks.length;
     const documentsSelected = Array.from(new Set(chunks.map(c => c.documentName || "Desconhecido")));
-    const documentsIncluded = Array.from(new Set(finalOrderedChunks.map(c => c.documentName || "Desconhecido")));
+    const documentsIncluded = Array.from(new Set(mergedChunks.map(c => c.documentName || "Desconhecido")));
+    const durationMs = performance.now() - builderStart;
+
+    if (env.NODE_ENV === "development") {
+      console.log("\n--- [DEBUG] [CONTEXT_BUILDER] ---");
+      console.log(`Tempo de processamento: ${durationMs.toFixed(2)}ms`);
+      console.log(`Modo de seleção: ${selectedMode}`);
+      console.log(`Chunks iniciais: ${totalChunksBefore} | Chunks finais selecionados: ${finalOrderedChunks.length}`);
+      console.log(`Documentos selecionados: ${documentsSelected.join(", ")}`);
+      console.log(`Documentos incluídos no contexto final: ${documentsIncluded.join(", ")}`);
+      console.log(`Chunks removidos por redundância/sobreposição: ${removedChunksLog.length}`);
+      removedChunksLog.forEach((item, idx) => {
+        console.log(`  [Removido ${idx + 1}] Motivo: ${item.reason}`);
+        console.log(`    Texto: "${item.text.substring(0, 80)}..."`);
+      });
+      console.log(`Tamanho final do contexto: ${context.length} caracteres`);
+      console.log("---------------------------------\n");
+    }
 
     logger.info("[DEBUG] [CONTEXT_BUILDER] Detalhes do Contexto Construído:", {
       documentsSelected,
@@ -305,12 +501,15 @@ export class ContextBuilderService {
       chunksDiscarded: discardedCount,
       discardReason: discardedCount > 0 ? "Excesso do limite de caracteres do contexto (maxContextSize)" : "Nenhum chunk descartado",
       finalContextSize: context.length,
-      documentsIncluded
+      documentsIncluded,
+      removedChunksCount: removedChunksLog.length,
+      builderDurationMs: parseFloat(durationMs.toFixed(2)),
+      selectedMode
     });
 
     return {
       context,
-      selectedChunks: finalOrderedChunks,
+      selectedChunks: mergedChunks,
     };
   }
 
@@ -320,7 +519,7 @@ export class ContextBuilderService {
    */
   static buildContext(
     chunks: ContextChunkInput[],
-    maxContextSize: number = env.DEFAULT_MAX_CONTEXT_SIZE
+    maxContextSize: number = env.MAX_CONTEXT_SIZE
   ): string {
     const result = this.buildContextDetailed(chunks, maxContextSize);
     return result.context;

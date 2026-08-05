@@ -16,6 +16,17 @@ interface EnvVariables {
   DEFAULT_MAX_CONTEXT_SIZE: number;
   DEFAULT_MIN_CHUNKS_PER_DOCUMENT: number;
 
+  // Retrieval Settings (Centralized in PR 5)
+  RRF_K: number;
+  MAX_RESULTS: number;
+  MAX_CONTEXT_CHUNKS: number;
+  MIN_VECTOR_SCORE: number;
+  MIN_LEXICAL_SCORE: number;
+  MAX_CHUNKS_PER_DOCUMENT: number;
+  MAX_CONTEXT_SIZE: number;
+  DIVERSITY_SCORE_GAP: number;
+  MAX_OVERLAP_THRESHOLD: number;
+
   // Cache settings
   EMBEDDING_CACHE_TTL: number; // in seconds
   EMBEDDING_CACHE_MAX_SIZE: number;
@@ -82,6 +93,17 @@ function validateEnv(): EnvVariables {
     DEFAULT_MIN_SCORE: process.env.DEFAULT_MIN_SCORE ? parseFloat(process.env.DEFAULT_MIN_SCORE) : 0.3,
     DEFAULT_MAX_CONTEXT_SIZE: process.env.DEFAULT_MAX_CONTEXT_SIZE ? parseInt(process.env.DEFAULT_MAX_CONTEXT_SIZE, 10) : 4000,
     DEFAULT_MIN_CHUNKS_PER_DOCUMENT: process.env.MIN_CHUNKS_PER_DOCUMENT ? parseInt(process.env.MIN_CHUNKS_PER_DOCUMENT, 10) : 3,
+
+    // Retrieval Settings (Centralized in PR 5)
+    RRF_K: process.env.RRF_K ? parseInt(process.env.RRF_K, 10) : 60,
+    MAX_RESULTS: process.env.MAX_RESULTS ? parseInt(process.env.MAX_RESULTS, 10) : (process.env.DEFAULT_TOP_K ? parseInt(process.env.DEFAULT_TOP_K, 10) : 5),
+    MAX_CONTEXT_CHUNKS: process.env.MAX_CONTEXT_CHUNKS ? parseInt(process.env.MAX_CONTEXT_CHUNKS, 10) : 10,
+    MIN_VECTOR_SCORE: process.env.MIN_VECTOR_SCORE ? parseFloat(process.env.MIN_VECTOR_SCORE) : 0.15,
+    MIN_LEXICAL_SCORE: process.env.MIN_LEXICAL_SCORE ? parseFloat(process.env.MIN_LEXICAL_SCORE) : 0.01,
+    MAX_CHUNKS_PER_DOCUMENT: process.env.MAX_CHUNKS_PER_DOCUMENT ? parseInt(process.env.MAX_CHUNKS_PER_DOCUMENT, 10) : 4,
+    MAX_CONTEXT_SIZE: process.env.MAX_CONTEXT_SIZE ? parseInt(process.env.MAX_CONTEXT_SIZE, 10) : (process.env.DEFAULT_MAX_CONTEXT_SIZE ? parseInt(process.env.DEFAULT_MAX_CONTEXT_SIZE, 10) : 4000),
+    DIVERSITY_SCORE_GAP: process.env.DIVERSITY_SCORE_GAP ? parseFloat(process.env.DIVERSITY_SCORE_GAP) : 0.25,
+    MAX_OVERLAP_THRESHOLD: process.env.MAX_OVERLAP_THRESHOLD ? parseFloat(process.env.MAX_OVERLAP_THRESHOLD) : 0.7,
 
     // Cache defaults: TTL 1 day (86400s), max size 1000
     EMBEDDING_CACHE_TTL: process.env.EMBEDDING_CACHE_TTL ? parseInt(process.env.EMBEDDING_CACHE_TTL, 10) : 86400,

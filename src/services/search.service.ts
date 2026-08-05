@@ -184,15 +184,15 @@ export class SearchService {
    * (Postgres Full Text Search using websearch_to_tsquery).
    *
    * @param queryText - Search question
-   * @param topK - Maximum number of results (default env.DEFAULT_TOP_K)
-   * @param scoreThreshold - Minimum similarity score (default env.DEFAULT_MIN_SCORE)
+   * @param topK - Maximum number of results (default env.MAX_RESULTS)
+   * @param scoreThreshold - Minimum similarity score (default env.MIN_VECTOR_SCORE)
    * @param filters - Optional filters (documentId, category, documentType)
    * @returns List of matching results sorted by composite score descending
    */
   static async search(
     queryText: string,
-    topK: number = env.DEFAULT_TOP_K,
-    scoreThreshold: number = env.DEFAULT_MIN_SCORE,
+    topK: number = env.MAX_RESULTS,
+    scoreThreshold: number = env.MIN_VECTOR_SCORE,
     filters?: SearchFilters
   ): Promise<SearchResultItem[]> {
     const startTime = performance.now();
@@ -214,7 +214,9 @@ export class SearchService {
     }
 
     // 2. Generate embedding for query text (leverages caching and retries internally)
+    const embeddingStart = performance.now();
     const embedding = await createEmbedding(queryText);
+    const embeddingDuration = performance.now() - embeddingStart;
 
     // Enforce 1536-dimensional vectors and log dimension sent to RPC
     const targetDimension = 1536;
@@ -302,10 +304,12 @@ export class SearchService {
 
     // 4.3. Run both parallelly using Promise.allSettled
     console.log(`[SEARCH] Executando busca vetorial e busca lexical em paralelo...`);
+    const parallelStart = performance.now();
     const [vectorRes, lexicalRes] = await Promise.allSettled([
       vectorQuery,
       lexicalQuery,
     ]);
+    const parallelDuration = performance.now() - parallelStart;
 
     // 4.4. Handle Vector result or its fallback
     let rawVectorResults: any[] = [];
@@ -386,7 +390,8 @@ export class SearchService {
       }
     }
 
-    // 5. Fusion of Results: deduplicate, combine scores, maintain diversity
+    // 5. Fusion of Results using Reciprocal Rank Fusion (RRF) (PR 5)
+    const rrfStart = performance.now();
     interface ChunkCandidate {
       id: string;
       documentId: string;
@@ -397,20 +402,28 @@ export class SearchService {
       filename: string;
       vectorScore: number;
       lexicalScore: number;
+      vectorRank: number; // 1-based rank, 0 if not found
+      lexicalRank: number; // 1-based rank, 0 if not found
+      rrfScore: number;
     }
 
     const candidateMap = new Map<string, ChunkCandidate>();
 
+    // Sort and filter Vector search results strictly first
+    const sortedVector = [...rawVectorResults]
+      .filter((item) => (item?.similarity ?? 0) >= scoreThreshold)
+      .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
+
+    // Sort and filter Lexical search results strictly first
+    const sortedLexical = [...rawLexicalResults]
+      .filter((item) => (item?.similarity ?? 0) >= env.MIN_LEXICAL_SCORE)
+      .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
+
     // 5.1. Process Vector search contributors
-    for (const item of rawVectorResults) {
+    for (let i = 0; i < sortedVector.length; i++) {
+      const item = sortedVector[i];
       if (!item) continue;
       const vScore = item.similarity ?? 0;
-
-      // Filter by vector score threshold (use strict scoreThreshold parameter)
-      if (vScore < scoreThreshold) {
-        continue;
-      }
-
       const key = `${item.document_id}_${item.chunk_index}`;
 
       let cleanText = item.content ?? "";
@@ -438,24 +451,23 @@ export class SearchService {
         filename,
         vectorScore: vScore,
         lexicalScore: 0,
+        vectorRank: i + 1,
+        lexicalRank: 0,
+        rrfScore: 0,
       });
     }
 
     // 5.2. Process Lexical search contributors
-    for (const item of rawLexicalResults) {
+    for (let i = 0; i < sortedLexical.length; i++) {
+      const item = sortedLexical[i];
       if (!item) continue;
       const lScore = item.similarity ?? 0;
-
-      // Filter by lexical score threshold
-      if (lScore < HYBRID_MIN_LEXICAL_SCORE) {
-        continue;
-      }
-
       const key = `${item.document_id}_${item.chunk_index}`;
       const existing = candidateMap.get(key);
 
       if (existing) {
         existing.lexicalScore = Math.max(existing.lexicalScore, lScore);
+        existing.lexicalRank = i + 1;
       } else {
         let cleanText = item.content ?? "";
         let metadata: any = {};
@@ -482,20 +494,32 @@ export class SearchService {
           filename,
           vectorScore: 0,
           lexicalScore: lScore,
+          vectorRank: 0,
+          lexicalRank: i + 1,
+          rrfScore: 0,
         });
       }
     }
 
-    // 5.3. Text-based Deduplication preserving the maximum score
+    // Calculate Combined RRF scores
+    const rrfK = env.RRF_K;
+    for (const cand of candidateMap.values()) {
+      const vecTerm = cand.vectorRank > 0 ? 1 / (rrfK + cand.vectorRank) : 0;
+      const lexTerm = cand.lexicalRank > 0 ? 1 / (rrfK + cand.lexicalRank) : 0;
+      // Add a tiny fraction of raw similarity scores as a tie-breaker to ensure precise relevance ranking
+      cand.rrfScore = vecTerm + lexTerm + (cand.vectorScore * 0.0001) + (cand.lexicalScore * 0.0001);
+    }
+
+    // 5.3. Text-based Deduplication preserving the maximum RRF score
     const uniqueTextCandidates = new Map<string, ChunkCandidate>();
 
     for (const cand of candidateMap.values()) {
       const textKey = cand.cleanText.toLowerCase().trim();
-      const candCombinedRawScore = (cand.vectorScore * HYBRID_VECTOR_WEIGHT) + (cand.lexicalScore * HYBRID_LEXICAL_WEIGHT);
+      const candCombinedRawScore = cand.rrfScore;
 
       const existing = uniqueTextCandidates.get(textKey);
       if (existing) {
-        const existingCombinedRawScore = (existing.vectorScore * HYBRID_VECTOR_WEIGHT) + (existing.lexicalScore * HYBRID_LEXICAL_WEIGHT);
+        const existingCombinedRawScore = existing.rrfScore;
         if (candCombinedRawScore > existingCombinedRawScore) {
           uniqueTextCandidates.set(textKey, cand);
         }
@@ -508,13 +532,12 @@ export class SearchService {
     const finalCandidates: SearchResultItem[] = [];
 
     for (const cand of uniqueTextCandidates.values()) {
-      const combinedRawScore = (cand.vectorScore * HYBRID_VECTOR_WEIGHT) + (cand.lexicalScore * HYBRID_LEXICAL_WEIGHT);
+      const combinedRawScore = cand.rrfScore;
 
       let finalScore = combinedRawScore;
       const reasons: string[] = [];
 
-      reasons.push(`Base Vetorial: ${(cand.vectorScore * HYBRID_VECTOR_WEIGHT).toFixed(4)} (peso ${HYBRID_VECTOR_WEIGHT})`);
-      reasons.push(`Base Lexical: ${(cand.lexicalScore * HYBRID_LEXICAL_WEIGHT).toFixed(4)} (peso ${HYBRID_LEXICAL_WEIGHT})`);
+      reasons.push(`Base RRF Score: ${cand.rrfScore.toFixed(6)} (Vector Rank: ${cand.vectorRank || "N/A"}, Lexical Rank: ${cand.lexicalRank || "N/A"})`);
 
       // 5.4.1. Explicit Document Boost (+0.25)
       if (isDocumentExplicitlyMentioned(queryText, cand.filename)) {
@@ -545,6 +568,8 @@ export class SearchService {
     }
 
     // 6. Greedy Document Diversity Re-ranking using DIVERSITY_PENALTY_FACTOR
+    const rrfDuration = performance.now() - rrfStart;
+    const diversityStart = performance.now();
     const dynamicResults: SearchResultItem[] = [];
     const docCounts = new Map<string, number>();
 
@@ -575,10 +600,18 @@ export class SearchService {
 
     // Limit output results strictly to topK
     const uniqueResults = dynamicResults.slice(0, topK);
+    const diversityDuration = performance.now() - diversityStart;
 
     // 7. Structured Development Logs tracing search operations using down arrows (↓)
     if (env.NODE_ENV === "development" || !isTest) {
       console.log(`\nConsulta: "${queryText}"\n`);
+      console.log(`↓\n`);
+      console.log(`[DESEMPENHO DO RETRIEVAL (RAG STAGE 1)]`);
+      console.log(`  - 1. Geração de Embedding: ${embeddingDuration.toFixed(2)}ms`);
+      console.log(`  - 2. Busca Híbrida Paralela (Banco): ${parallelDuration.toFixed(2)}ms`);
+      console.log(`  - 3. Processamento RRF: ${rrfDuration.toFixed(2)}ms`);
+      console.log(`  - 4. Re-ranking de Diversidade: ${diversityDuration.toFixed(2)}ms`);
+      console.log(`  - Tempo Total do Retrieval: ${(performance.now() - startTime).toFixed(2)}ms\n`);
       console.log(`↓\n`);
 
       console.log(`Resultados Vetoriais (${rawVectorResults.length}):`);
@@ -593,19 +626,18 @@ export class SearchService {
       });
       console.log(`\n↓\n`);
 
-      console.log(`Resultados Mesclados (Deduplicados e Fundidos):`);
+      console.log(`Resultados Mesclados (Deduplicados e Fundidos usando RRF):`);
       uniqueTextCandidates.forEach((cand, key) => {
-        const combinedRaw = (cand.vectorScore * HYBRID_VECTOR_WEIGHT) + (cand.lexicalScore * HYBRID_LEXICAL_WEIGHT);
-        console.log(`  - Chunk ${key}: vector=${cand.vectorScore.toFixed(4)}, lexical=${cand.lexicalScore.toFixed(4)}, combined=${combinedRaw.toFixed(4)}`);
+        console.log(`  - Chunk ${key}: vector_rank=${cand.vectorRank}, lexical_rank=${cand.lexicalRank}, rrf_score=${cand.rrfScore.toFixed(6)}`);
       });
       console.log(`\n↓\n`);
 
-      console.log(`Ranking Final (Com boosts de documento e metadados, e penalidade de diversidade):`);
+      console.log(`Ranking Final (RRF Com boosts de documento/metadados, e penalidade de diversidade):`);
       uniqueResults.forEach((res, i) => {
         const metadata = res.metadata || {};
         const reasonsStr = metadata.reasons && metadata.reasons.length > 0 ? metadata.reasons.join(", ") : "None";
         console.log(`  [Rank ${i+1}] Document: ${metadata.sourceDocument || "Desconhecido"} | Page: ${metadata.pageNumber ?? "N/A"}`);
-        console.log(`    Original Score: ${(metadata.originalScore ?? res.score).toFixed(4)} -> Final Score: ${res.score.toFixed(4)}`);
+        console.log(`    RRF Score: ${(metadata.rrfScore ?? res.score).toFixed(6)} -> Final Score: ${res.score.toFixed(6)}`);
         console.log(`    Boost Reasons / Score Motivations: ${reasonsStr}`);
         console.log(`    Snippet: "${res.text.substring(0, 80)}..."`);
       });
