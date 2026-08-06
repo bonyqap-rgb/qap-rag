@@ -12,6 +12,7 @@ function normalizeText(text: string): string {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "") // remove accents
+    .replace(/[._\-]/g, " ") // replace dots, underscores, and dashes with spaces
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -40,131 +41,49 @@ export interface InspectionResult {
 }
 
 /**
- * Main inspection logic that can be tested
+ * Main inspection logic that executes exclusively against the real Supabase database.
  */
 export async function inspectDocument(docQuery: string): Promise<InspectionResult | null> {
-  const isTestEnv = env.SUPABASE_SERVICE_ROLE_KEY === "dummy_key";
+  // Check if environment variables are available and not mock values
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_ROLE_KEY === "dummy_key") {
+    throw new Error("Erro: Chave de API do Supabase não configurada ou inválida. Não é possível inspecionar a base de dados real.");
+  }
 
   // 1. Fetch matching document from knowledge_documents
-  let docData: any = null;
+  const { data: documents, error: docError } = await supabase
+    .from("knowledge_documents")
+    .select("*");
 
-  if (isTestEnv) {
-    // Return mock document for tests
-    const queryNorm = normalizeText(docQuery);
-    if (queryNorm.includes("codigo penal militar") || queryNorm.includes("cpm")) {
-      docData = {
-        id: "mock-cpm-uuid",
-        file_name: "codigo_penal_militar.pdf",
-        status: "INDEXADO",
-        total_chunks: 100,
-        total_embeddings: 100,
-        extracted_chars: 120000,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-    } else if (queryNorm.includes("rdpm")) {
-      docData = {
-        id: "mock-rdpm-uuid",
-        file_name: "regulamento_disciplinar_rdpm.pdf",
-        status: "INDEXADO",
-        total_chunks: 50,
-        total_embeddings: 50,
-        extracted_chars: 60000,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-    } else {
-      return null;
-    }
-  } else {
-    // Direct database query
-    const { data: documents, error: docError } = await supabase
-      .from("knowledge_documents")
-      .select("*");
-
-    if (docError) {
-      console.error(`[INSPECT] Erro ao buscar documentos: ${docError.message}`);
-      throw docError;
-    }
-
-    const queryNorm = normalizeText(docQuery);
-    // Find the best match by checking if the normalized file name contains our query or vice versa
-    docData = documents?.find((doc: any) => {
-      const docNorm = normalizeText(doc.file_name);
-      return docNorm.includes(queryNorm) || queryNorm.includes(docNorm) ||
-        (queryNorm === "cpm" && docNorm.includes("codigo penal militar")) ||
-        (queryNorm === "rdpm" && docNorm.includes("regulamento disciplinar"));
-    });
+  if (docError) {
+    throw new Error(`Erro ao buscar documentos da base real: ${docError.message}`);
   }
+
+  const queryNorm = normalizeText(docQuery);
+  // Find the best match by checking if the normalized file name contains our query or vice versa
+  const docData = documents?.find((doc: any) => {
+    const docNorm = normalizeText(doc.file_name);
+    return docNorm.includes(queryNorm) || queryNorm.includes(docNorm) ||
+      (queryNorm === "cpm" && docNorm.includes("codigo penal militar")) ||
+      (queryNorm === "rdpm" && docNorm.includes("regulamento disciplinar"));
+  });
 
   if (!docData) {
     return null;
   }
 
   // 2. Fetch all chunks of the found document
-  let chunks: any[] = [];
-  if (isTestEnv) {
-    // Generate dummy chunks for the mock documents to satisfy CPM and RDPM test cases
-    const isCPM = docData.file_name.includes("codigo_penal_militar");
-    if (isCPM) {
-      chunks = [
-        {
-          id: "chunk-cpm-1",
-          document_id: docData.id,
-          chunk_index: 0,
-          content: '[METADATA:{"sourceDocument":"codigo_penal_militar.pdf","pageNumber":1}]\nArtigo 1. Este é o Código Penal Militar.'
-        },
-        {
-          id: "chunk-cpm-2",
-          document_id: docData.id,
-          chunk_index: 10,
-          content: '[METADATA:{"sourceDocument":"codigo_penal_militar.pdf","pageNumber":5}]\nArtigo 187. Deserção: Consiste em o militar ausentar-se, sem licença, da unidade em que serve.'
-        },
-        {
-          id: "chunk-cpm-3",
-          document_id: docData.id,
-          chunk_index: 20,
-          content: '[METADATA:{"sourceDocument":"codigo_penal_militar.pdf","pageNumber":12}]\nAbandono de posto é considerado crime contra o serviço militar.'
-        }
-      ];
-    } else {
-      chunks = [
-        {
-          id: "chunk-rdpm-1",
-          document_id: docData.id,
-          chunk_index: 0,
-          content: '[METADATA:{"sourceDocument":"regulamento_disciplinar_rdpm.pdf","pageNumber":1}]\nArtigo 1. Regulamento Disciplinar da PM.'
-        },
-        {
-          id: "chunk-rdpm-2",
-          document_id: docData.id,
-          chunk_index: 15,
-          content: '[METADATA:{"sourceDocument":"regulamento_disciplinar_rdpm.pdf","pageNumber":8}]\nArtigo 53. Transgressão disciplinar gravíssima sujeita a processo administrativo disciplinar de demissão.'
-        },
-        {
-          id: "chunk-rdpm-3",
-          document_id: docData.id,
-          chunk_index: 30,
-          content: '[METADATA:{"sourceDocument":"regulamento_disciplinar_rdpm.pdf","pageNumber":14}]\nInstaurar sindicância para apurar a autoria do fato ocorrido.'
-        }
-      ];
-    }
-  } else {
-    const { data: chunkList, error: chunkError } = await supabase
-      .from("knowledge_chunks")
-      .select("*")
-      .eq("document_id", docData.id)
-      .order("chunk_index", { ascending: true });
+  const { data: chunks, error: chunkError } = await supabase
+    .from("knowledge_chunks")
+    .select("*")
+    .eq("document_id", docData.id)
+    .order("chunk_index", { ascending: true });
 
-    if (chunkError) {
-      console.error(`[INSPECT] Erro ao buscar chunks: ${chunkError.message}`);
-      throw chunkError;
-    }
-    chunks = chunkList || [];
+  if (chunkError) {
+    throw new Error(`Erro ao buscar chunks do documento "${docData.file_name}": ${chunkError.message}`);
   }
 
   // Parse chunks to extract text and metadata
-  const parsedChunks = chunks.map((c: any) => {
+  const parsedChunks = (chunks || []).map((c: any) => {
     let cleanText = c.content ?? "";
     let metadata: any = {};
     const metaMatch = cleanText.match(/^\[METADATA:([\s\S]*?)\]\n([\s\S]*)$/);
@@ -240,8 +159,8 @@ export async function inspectDocument(docQuery: string): Promise<InspectionResul
     documentName: docData.file_name,
     totalPages,
     extractedChars: docData.extracted_chars ?? 0,
-    totalChunks: docData.total_chunks ?? chunks.length,
-    totalEmbeddings: docData.total_embeddings ?? chunks.length,
+    totalChunks: docData.total_chunks ?? (chunks || []).length,
+    totalEmbeddings: docData.total_embeddings ?? (chunks || []).length,
     firstChunks: first20,
     searchResults
   };
