@@ -252,7 +252,7 @@ export class ChatService {
 
     // Resolve parameter configuration with fallbacks
     const topK = options.topK !== undefined ? options.topK : (env.DEFAULT_TOP_K ?? 5);
-    const scoreThreshold = options.scoreThreshold !== undefined ? options.scoreThreshold : (env.DEFAULT_MIN_SCORE ?? 0.3);
+    const scoreThreshold = options.scoreThreshold !== undefined ? options.scoreThreshold : (env.DEFAULT_MIN_SCORE ?? 0.15);
     const maxContextSize = options.maxContextSize !== undefined ? options.maxContextSize : (env.DEFAULT_MAX_CONTEXT_SIZE ?? 4000);
     const temperature = options.temperature !== undefined ? options.temperature : 0;
     const timeout = options.timeout !== undefined ? options.timeout : 25000;
@@ -411,7 +411,7 @@ ${globalResultsCount !== undefined ? globalResultsCount : "N/A"}`);
     // 3. Handle Empty/Insufficient Context Scenario (First Check: resultsCount === 0)
     if (resultsCount === 0) {
       const overallDuration = performance.now() - overallStartTime;
-      const motivoInsuficiencia = "Nenhum trecho retornado da busca semântica (resultsCount === 0)";
+      const motivoInsuficiencia = `Nenhum trecho relevante foi retornado da busca no banco de dados. Pergunta: "${question}". Documento resolvido: ${resolvedDocNames || "Nenhum"}. Filtros ativos: ${JSON.stringify(activeFilters)}. Limite mínimo de similaridade exigido: ${scoreThreshold}.`;
 
       // Log motivo exato da insuficiência quando ocorrer
       logger.info("Insuficiência de contexto detectada", {
@@ -430,7 +430,7 @@ ${globalResultsCount !== undefined ? globalResultsCount : "N/A"}`);
       });
 
       return {
-        answer: "Não encontrei essa informação na base de conhecimento.",
+        answer: `Não encontrei essa informação na base de conhecimento. Causa detalhada: ${motivoInsuficiencia}`,
         sources: [],
         metadata: {
           searchTime: `${searchTimeMs.toFixed(0)}ms`,
@@ -477,7 +477,7 @@ ${globalResultsCount !== undefined ? globalResultsCount : "N/A"}`);
     // Second Check: No valid chunk retrieved/utilized
     if (finalUsedChunks.length === 0) {
       const overallDuration = performance.now() - overallStartTime;
-      const motivoInsuficiencia = "Nenhum chunk válido foi recuperado após filtragem/processamento de contexto (finalUsedChunks.length === 0)";
+      const motivoInsuficiencia = `Nenhum chunk válido permaneceu após a filtragem de sobreposição ou excesso de contexto. Resultados da busca inicial: ${resultsCount} chunks. Pergunta: "${question}". Documento resolvido: ${resolvedDocNames || "Nenhum"}. Limite de contexto: ${maxContextSize} caracteres.`;
 
       // Log motivo exato da insuficiência quando ocorrer
       logger.info("Insuficiência de contexto detectada", {
@@ -496,7 +496,7 @@ ${globalResultsCount !== undefined ? globalResultsCount : "N/A"}`);
       });
 
       return {
-        answer: "Não encontrei essa informação na base de conhecimento.",
+        answer: `Não encontrei essa informação na base de conhecimento. Causa detalhada: ${motivoInsuficiencia}`,
         sources: [],
         metadata: {
           searchTime: `${searchTimeMs.toFixed(0)}ms`,

@@ -76,7 +76,7 @@ test("ChatService.chat - context empty scenario", async () => {
   try {
     const res = await ChatService.chat("Qual é a capital de Marte?");
 
-    assert.strictEqual(res.answer, "Não encontrei essa informação na base de conhecimento.");
+    assert.ok(res.answer.startsWith("Não encontrei essa informação na base de conhecimento."));
     assert.strictEqual(res.sources.length, 0);
     assert.strictEqual(res.metadata.generationTime, "0ms");
   } finally {
@@ -655,7 +655,7 @@ test("ChatService.chat - insufficiency logs and returns empty answer when result
 
   try {
     const res = await ChatService.chat("Questão inexistente");
-    assert.strictEqual(res.answer, "Não encontrei essa informação na base de conhecimento.");
+    assert.ok(res.answer.startsWith("Não encontrei essa informação na base de conhecimento."));
     assert.strictEqual(res.sources.length, 0);
   } finally {
     SearchService.search = originalSearch;
