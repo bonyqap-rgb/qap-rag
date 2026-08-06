@@ -498,23 +498,17 @@ test("ChatService.chat - Balanced Multi-Document Retrieval behavior when multipl
     assert.deepStrictEqual(searchCalls[1].filters, { documentId: "doc-B" });
     assert.strictEqual(searchCalls[1].topK, 4);
 
-    // Verify correct sorting and deduplication
-    // The final sources will be sorted lexicographically by documentId and then by chunkIndex:
+    // Verify correct sorting and deduplication (PR 5 merges consecutive chunks of same doc)
     // 1. doc-A chunkIndex 0 (score 0.8)
-    // 2. doc-B chunkIndex 0 (score 0.9)
-    // 3. doc-B chunkIndex 1 (score 0.85)
-    assert.strictEqual(res.sources.length, 3);
+    // 2. doc-B chunkIndex 0 (score 0.9) and doc-B chunkIndex 1 (score 0.85) merged into 1 chunk
+    assert.strictEqual(res.sources.length, 2);
     assert.strictEqual(res.sources[0].documentId, "doc-A");
     assert.strictEqual(res.sources[0].chunkIndex, 0);
     assert.strictEqual(res.sources[0].score, 0.8);
 
     assert.strictEqual(res.sources[1].documentId, "doc-B");
-    assert.strictEqual(res.sources[1].chunkIndex, 0);
+    assert.strictEqual(res.sources[1].chunkIndex, 1);
     assert.strictEqual(res.sources[1].score, 0.9);
-
-    assert.strictEqual(res.sources[2].documentId, "doc-B");
-    assert.strictEqual(res.sources[2].chunkIndex, 1);
-    assert.strictEqual(res.sources[2].score, 0.85);
   } finally {
     SearchService.search = originalSearch;
     supabase.from = originalFrom;

@@ -7,7 +7,8 @@ import {
   ContextBuilderService,
   extractMetadataFromText,
   compareArticles,
-  ContextChunkInput
+  ContextChunkInput,
+  computeJaccardSimilarity
 } from "./context-builder.service.js";
 
 test("extractMetadataFromText - parses Portuguese legal/military indicators", () => {
@@ -101,21 +102,37 @@ test("ContextBuilderService.buildContextDetailed - performs balanced proportiona
   const chunks: ContextChunkInput[] = [];
 
   // Doc A
-  for (let i = 0; i < 10; i++) {
+  const docATexts = [
+    "Artigo 1: Normas fundamentais sobre hierarquia e disciplina no serviço militar estadual e policiamento.",
+    "Artigo 2: O oficial deve manter postura digna de seu cargo perante os subordinados e a sociedade civil.",
+    "Artigo 3: Os praças possuem deveres específicos no cumprimento das escalas de plantão ordinário e extraordinário.",
+    "Artigo 4: As infrações disciplinares classificam-se em graves, médias e leves, a critério da autoridade delegada.",
+    "Artigo 5: O processo administrativo disciplinar militar assegura ampla defesa e o contraditório ao acusado.",
+    "Artigo 6: Das decisões proferidas cabe recurso hierárquico no prazo legal estabelecido em portaria específica.",
+    "Artigo 7: A reabilitação do militar punido ocorre após preenchidos os requisitos temporais e de bom comportamento.",
+    "Artigo 8: O porte de arma em serviço é obrigatório para todos os integrantes ativos da corporação operacional.",
+    "Artigo 9: Ficam dispensados das atividades físicas regulamentares os servidores que apresentarem laudo médico válido.",
+    "Artigo 10: Casos omissos neste regulamento de conduta serão resolvidos pelo colegiado superior da Polícia Militar."
+  ];
+  for (let i = 0; i < docATexts.length; i++) {
     chunks.push({
       documentId: "doc-A",
       chunkIndex: i,
-      text: `Artigo ${i + 1}: Texto longo número ${i + 1} para preencher o espaço do documento A.`,
+      text: docATexts[i],
       metadata: { sourceDocument: "DocA.pdf" }
     });
   }
 
   // Doc B
-  for (let i = 0; i < 2; i++) {
+  const docBTexts = [
+    "Item 1: Diretrizes de policiamento preventivo nas áreas com maior índice de criminalidade urbana local.",
+    "Item 2: Escala de serviço das guarnições para o feriado prolongado com foco em atendimento ao cidadão."
+  ];
+  for (let i = 0; i < docBTexts.length; i++) {
     chunks.push({
       documentId: "doc-B",
       chunkIndex: i,
-      text: `Item ${i + 1}: Diretriz número ${i + 1} para preencher o espaço do documento B.`,
+      text: docBTexts[i],
       metadata: { sourceDocument: "DocB.pdf" }
     });
   }
@@ -128,7 +145,92 @@ test("ContextBuilderService.buildContextDetailed - performs balanced proportiona
   const docACount = result.selectedChunks.filter(c => c.documentId === "doc-A").length;
   const docBCount = result.selectedChunks.filter(c => c.documentId === "doc-B").length;
 
-  // Assert both documents got a fair share of chunks instead of Doc A hogging all space
-  assert.strictEqual(docBCount, 2); // Doc B is fully represented
+  // Assert both documents got a fair share of chunks.
+  // Note: Doc B's two chunks are consecutive and got merged into 1 chunk successfully!
+  assert.strictEqual(docBCount, 1); // Doc B is fully represented as 1 merged chunk
   assert.ok(docACount >= 2); // Doc A also got represented
+
+  // Verify text of the merged chunk contains both items
+  const docBChunk = result.selectedChunks.find(c => c.documentId === "doc-B")!;
+  assert.ok(docBChunk.text.includes("Item 1") && docBChunk.text.includes("Item 2"));
+});
+
+test("ContextBuilderService.computeJaccardSimilarity - ignores prepositions/stop words and measures precise overlap", () => {
+  const t1 = "O prazo para recurso administrativo no rito sumário.";
+  const t2 = "Qual o prazo do recurso de rito sumário do militar?";
+
+  const sim = computeJaccardSimilarity(t1, t2);
+  // Common terms: "prazo", "recurso", "rito", "sumario"
+  // Stop words: "o", "para", "no", "qual", "do", "de", "militar"? "militar" is not a stop word.
+  assert.ok(sim > 0.5);
+
+  // No overlap
+  const simZero = computeJaccardSimilarity("Policiamento ostensivo preventivo.", "Processo disciplinar militar.");
+  assert.strictEqual(simZero, 0);
+});
+
+test("ContextBuilderService - consecutive chunk merging for same articles", () => {
+  const chunks: ContextChunkInput[] = [
+    {
+      documentId: "doc-A",
+      chunkIndex: 0,
+      text: "Parte A do artigo 42.",
+      article: "42",
+      metadata: { sourceDocument: "DocA.pdf" }
+    },
+    {
+      documentId: "doc-A",
+      chunkIndex: 1,
+      text: "Parte B do artigo 42.",
+      article: "42",
+      metadata: { sourceDocument: "DocA.pdf" }
+    },
+    {
+      documentId: "doc-A",
+      chunkIndex: 2,
+      text: "Diferente artigo 43.",
+      article: "43",
+      metadata: { sourceDocument: "DocA.pdf" }
+    }
+  ];
+
+  const merged = ContextBuilderService.mergeConsecutiveChunks(chunks);
+  assert.strictEqual(merged.length, 2);
+  assert.ok(merged[0].text.includes("Parte A") && merged[0].text.includes("Parte B"));
+  assert.strictEqual(merged[1].text, "Diferente artigo 43.");
+});
+
+test("ContextBuilderService - Controlled Diversity gap-based selection", () => {
+  // Scenario 1: One dominant document (score gap > 0.25)
+  const dominantChunks: ContextChunkInput[] = [
+    {
+      documentId: "doc-A",
+      chunkIndex: 0,
+      text: "Excelente trecho muito relevante.",
+      score: 0.9,
+      metadata: { sourceDocument: "DocA.pdf" }
+    },
+    {
+      documentId: "doc-A",
+      chunkIndex: 1,
+      text: "Outro trecho também bastante útil do mesmo documento.",
+      score: 0.85,
+      metadata: { sourceDocument: "DocA.pdf" }
+    },
+    {
+      documentId: "doc-B",
+      chunkIndex: 0,
+      text: "Trecho genérico de outro doc com baixa utilidade.",
+      score: 0.4,
+      metadata: { sourceDocument: "DocB.pdf" }
+    }
+  ];
+
+  const resultDom = ContextBuilderService.buildContextDetailed(dominantChunks, 1000);
+  // Gap is 0.9 - 0.4 = 0.5 (> 0.25). Should select strictly by score (Doc A chunks should come first, then Doc B)
+  // In the output: since Doc A chunks are merged (they are consecutive 0 and 1, same doc, bothNoArticle is true),
+  // they form 1 merged chunk. So selected chunks has Doc A (merged) and Doc B.
+  const docAChunks = resultDom.selectedChunks.filter(c => c.documentId === "doc-A");
+  assert.strictEqual(docAChunks.length, 1);
+  assert.ok(docAChunks[0].text.includes("Excelente trecho") && docAChunks[0].text.includes("bastante útil"));
 });
