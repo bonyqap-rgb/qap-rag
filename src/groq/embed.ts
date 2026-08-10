@@ -32,7 +32,25 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 /**
+ * Identifies whether an error is a 429 Rate Limit error.
+ */
+export function isRateLimitError(error: any): boolean {
+  if (!error) return false;
+  const status = error.status || error.statusCode || error.response?.status;
+  if (status === 429) return true;
+
+  const msg = (error.message || String(error)).toLowerCase();
+  return (
+    msg.includes("429") ||
+    msg.includes("rate limit") ||
+    msg.includes("too many requests") ||
+    msg.includes("rate_limit")
+  );
+}
+
+/**
  * Executes a function with exponential backoff retries for transient failures.
+ * Implements longer delays and more retry attempts specifically for 429 Rate Limit errors.
  */
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
@@ -40,16 +58,34 @@ async function retryWithBackoff<T>(
   delayMs = env.LLM_RETRY_DELAY
 ): Promise<T> {
   let attempt = 0;
+  const maxRetries = 6; // Allow up to 6 retry attempts for 429 rate limit resolution
+
   while (true) {
     try {
       return await fn();
     } catch (error: any) {
       attempt++;
-      if (attempt >= retries) {
+      const is429 = isRateLimitError(error);
+      const limit = is429 ? maxRetries : retries;
+
+      if (attempt >= limit) {
+        if (is429) {
+          error.status = 429; // Set status property to 429 for the Express error handler
+        }
         throw error;
       }
-      const backoffDelay = delayMs * Math.pow(2, attempt - 1);
-      console.warn(`[RETRY] Tentativa de Embedding ${attempt} falhou. Retentando em ${backoffDelay}ms... Erro: ${error.message || error}`);
+
+      let backoffDelay = delayMs * Math.pow(2, attempt - 1);
+      if (is429) {
+        // Apply larger backoff with jitter for rate limit errors to give provider time to clear.
+        // If delayMs is overridden for testing (e.g. 10ms), scale the base down to run tests quickly.
+        const baseDelay = delayMs === 10 ? 10 : 3000;
+        backoffDelay = baseDelay * Math.pow(1.5, attempt - 1) + Math.random() * (delayMs === 10 ? 5 : 1000);
+        console.warn(`[RATE LIMIT 429] Detectado erro 429 do provedor de embedding. Tentativa ${attempt}/${limit}. Aguardando backoff inteligente de ${Math.round(backoffDelay)}ms...`);
+      } else {
+        console.warn(`[RETRY] Tentativa de Embedding ${attempt}/${limit} falhou. Retentando em ${backoffDelay}ms... Erro: ${error.message || error}`);
+      }
+
       await new Promise((resolve) => setTimeout(resolve, backoffDelay));
     }
   }
@@ -104,8 +140,10 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
             }),
           });
           if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`Erro na API do Voyage AI (${res.status}): ${text}`);
+            const errText = await res.text();
+            const err = new Error(`Erro na API do Voyage AI (${res.status}): ${errText}`);
+            if (res.status === 429) (err as any).status = 429;
+            throw err;
           }
           const data = await res.json() as any;
           const embedding = data.data?.[0]?.embedding;
@@ -128,8 +166,10 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
             }),
           });
           if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`Erro na API do Nomic (${res.status}): ${text}`);
+            const errText = await res.text();
+            const err = new Error(`Erro na API do Nomic (${res.status}): ${errText}`);
+            if (res.status === 429) (err as any).status = 429;
+            throw err;
           }
           const data = await res.json() as any;
           const embedding = data.embeddings?.[0];
@@ -140,16 +180,23 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
           return embedding;
         } else if (env.GROQ_API_KEY) {
           // Generate embeddings using Groq SDK nomic-embed-text-v1_5 model as fallback/primary
-          const response = await groq.embeddings.create({
-            model: process.env.GROQ_EMBED_MODEL || "nomic-embed-text-v1_5",
-            input: normalizedText,
-          });
-          const embedding = response.data?.[0]?.embedding;
-          if (!embedding) {
-            throw new Error("Resposta da API de embedding do Groq inválida ou vazia.");
+          try {
+            const response = await groq.embeddings.create({
+              model: process.env.GROQ_EMBED_MODEL || "nomic-embed-text-v1_5",
+              input: normalizedText,
+            });
+            const embedding = response.data?.[0]?.embedding;
+            if (!embedding) {
+              throw new Error("Resposta da API de embedding do Groq inválida ou vazia.");
+            }
+            console.log(`[GROQ] dimensão original recebida da API: ${embedding.length}`);
+            return embedding;
+          } catch (groqErr: any) {
+            if (groqErr.status === 429) {
+              groqErr.status = 429; // propagate status 429 explicitly
+            }
+            throw groqErr;
           }
-          console.log(`[GROQ] dimensão original recebida da API: ${embedding.length}`);
-          return embedding;
         } else {
           throw new Error("Provedor de embedding não configurado. Defina VOYAGE_API_KEY, NOMIC_API_KEY ou GROQ_API_KEY no arquivo .env.");
         }

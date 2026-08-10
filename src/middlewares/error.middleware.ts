@@ -17,7 +17,7 @@ export function errorHandler(
 
   const timestamp = new Date().toISOString();
   const route = req.originalUrl || req.url;
-  const status = err?.status || 500;
+  const status = err?.status || err?.statusCode || 500;
   const message = err instanceof Error ? err.message : String(err);
   const stack = err instanceof Error ? err.stack : undefined;
 
@@ -37,18 +37,19 @@ export function errorHandler(
   const isProd = env.NODE_ENV === "production";
 
   if (isProd) {
-    // Production: Hide stack trace and sensitive request headers/bodies to prevent data leak
+    // Production: Return the real error message instead of generic "Internal Server Error"
+    // so the client endpoint returns the true cause of indexing or rate limit failures.
     return res.status(status).json({
-      error: "ERROR",
+      error: status === 429 ? "TOO_MANY_REQUESTS" : "ERROR",
       timestamp,
-      message: status === 500 ? "Internal Server Error" : message,
+      message: message, // Preserve and return the real cause
       route,
       requestId,
     });
   } else {
     // Development: Return full detailed error diagnostics
     return res.status(status).json({
-      error: "ERROR",
+      error: status === 429 ? "TOO_MANY_REQUESTS" : "ERROR",
       timestamp,
       request: {
         method: req.method,

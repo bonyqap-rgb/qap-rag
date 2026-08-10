@@ -46,8 +46,22 @@ export class CircuitBreaker {
       const result = await fn();
       this.onSuccess();
       return result;
-    } catch (error) {
-      this.onFailure();
+    } catch (error: any) {
+      // Rate limits (429) do not indicate server outage and should not trip the circuit breaker
+      const is429 = error && (
+        error.status === 429 ||
+        error.statusCode === 429 ||
+        (error.message || "").toLowerCase().includes("429") ||
+        (error.message || "").toLowerCase().includes("rate limit") ||
+        (error.message || "").toLowerCase().includes("too many requests") ||
+        (error.message || "").toLowerCase().includes("rate_limit")
+      );
+
+      if (!is429) {
+        this.onFailure();
+      } else {
+        console.warn(`[CIRCUIT BREAKER] Ignorando falha por erro de Rate Limit (429) para evitar abertura indevida do disjuntor '${this.name}'.`);
+      }
       throw error;
     }
   }
