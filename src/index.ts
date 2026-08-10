@@ -148,7 +148,7 @@ app.use("/admin", adminRouter);
 // Apply Rate Limiters to specific endpoints
 app.use("/upload", indexRateLimiter, uploadRouter);
 app.use("/chat", chatRateLimiter, chatRouter);
-app.use("/documents", indexRateLimiter, documentsRouter);
+app.use("/documents", documentsRouter);
 app.use("/search", searchRateLimiter, searchRouter);
 app.use("/metrics", metricsRouter);
 

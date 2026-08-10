@@ -3,6 +3,7 @@ import { DocumentService } from "../services/document.service.js";
 import { indexingHistoryService } from "../services/indexing-history.service.js";
 import { logger } from "../services/logger.service.js";
 import { env } from "../config/env.js";
+import { indexRateLimiter, documentRateLimiter } from "../middlewares/rate-limit.middleware.js";
 
 const router = Router();
 export const documentService = new DocumentService();
@@ -11,7 +12,7 @@ export const documentService = new DocumentService();
  * GET /documents
  * Lists all documents.
  */
-router.get("/", async (_req: Request, res: Response, next: NextFunction) => {
+router.get("/", documentRateLimiter, async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const documents = await documentService.listDocuments();
     return res.status(200).json(documents);
@@ -24,7 +25,7 @@ router.get("/", async (_req: Request, res: Response, next: NextFunction) => {
  * GET /documents/statistics
  * Retrieves camelCase statistics about the knowledge base using only knowledge_documents and knowledge_chunks.
  */
-router.get("/statistics", async (req: Request, res: Response, next: NextFunction) => {
+router.get("/statistics", documentRateLimiter, async (req: Request, res: Response, next: NextFunction) => {
   const start = performance.now();
   const requestId = req.headers["x-request-id"] as string;
   try {
@@ -53,7 +54,7 @@ router.get("/statistics", async (req: Request, res: Response, next: NextFunction
  * GET /documents/stats
  * Retrieves statistics about the knowledge base.
  */
-router.get("/stats", async (req: Request, res: Response, next: NextFunction) => {
+router.get("/stats", documentRateLimiter, async (req: Request, res: Response, next: NextFunction) => {
   const start = performance.now();
   const requestId = req.headers["x-request-id"] as string;
   try {
@@ -82,7 +83,7 @@ router.get("/stats", async (req: Request, res: Response, next: NextFunction) => 
  * GET /documents/history
  * Retrieves the complete indexing runs history.
  */
-router.get("/history", async (_req: Request, res: Response, next: NextFunction) => {
+router.get("/history", documentRateLimiter, async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const history = await indexingHistoryService.getHistory();
     return res.status(200).json(history);
@@ -96,7 +97,7 @@ router.get("/history", async (_req: Request, res: Response, next: NextFunction) 
  * Administrative endpoint to reindex all completed documents sequentially.
  * Protected by SUPABASE_SERVICE_ROLE_KEY.
  */
-router.post("/reindex-all", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/reindex-all", indexRateLimiter, async (req: Request, res: Response, next: NextFunction) => {
   const start = performance.now();
   const requestId = req.headers["x-request-id"] as string;
 
@@ -146,7 +147,7 @@ router.post("/reindex-all", async (req: Request, res: Response, next: NextFuncti
  * POST /documents/:id/reindex
  * Reindexes an existing document by its ID (re-generating embeddings).
  */
-router.post("/:id/reindex", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/:id/reindex", indexRateLimiter, async (req: Request, res: Response, next: NextFunction) => {
   const start = performance.now();
   const requestId = req.headers["x-request-id"] as string;
   try {
@@ -177,7 +178,7 @@ router.post("/:id/reindex", async (req: Request, res: Response, next: NextFuncti
  * GET /documents/:id
  * Retrieves a single document by ID.
  */
-router.get("/:id", async (req: Request, res: Response, next: NextFunction) => {
+router.get("/:id", documentRateLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const document = await documentService.getDocumentById(req.params.id as string);
     return res.status(200).json(document);
@@ -190,7 +191,7 @@ router.get("/:id", async (req: Request, res: Response, next: NextFunction) => {
  * POST /documents
  * Creates a new document metadata.
  */
-router.post("/", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/", indexRateLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const createdDoc = await documentService.createDocument(req.body);
     return res.status(201).json(createdDoc);
@@ -203,7 +204,7 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
  * PATCH /documents/:id
  * Updates an existing document metadata.
  */
-router.patch("/:id", async (req: Request, res: Response, next: NextFunction) => {
+router.patch("/:id", indexRateLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const updatedDoc = await documentService.updateDocument(req.params.id as string, req.body);
     return res.status(200).json(updatedDoc);
@@ -216,7 +217,7 @@ router.patch("/:id", async (req: Request, res: Response, next: NextFunction) => 
  * DELETE /documents/:id
  * Deletes a document by ID.
  */
-router.delete("/:id", async (req: Request, res: Response, next: NextFunction) => {
+router.delete("/:id", indexRateLimiter, async (req: Request, res: Response, next: NextFunction) => {
   const start = performance.now();
   const requestId = req.headers["x-request-id"] as string;
   try {
