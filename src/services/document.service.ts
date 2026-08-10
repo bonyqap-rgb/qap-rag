@@ -366,12 +366,12 @@ export class DocumentService {
       }
     }
 
-    // Se o status do documento for INDEXAÇÃO_INVÁLIDA ou o arquivo físico do PDF existir no disco,
+    // Se o status do documento for INDEXAÇÃO_INVÁLIDA, PENDENTE ou o arquivo físico do PDF existir no disco,
     // devemos reprocessar o arquivo original do início para garantir reindexação segura.
-    if (status === "INDEXAÇÃO_INVÁLIDA" || fileExists) {
+    if (status === "INDEXAÇÃO_INVÁLIDA" || status === "PENDENTE" || fileExists) {
       if (!fileExists) {
         throw new ValidationError(
-          `Não é possível reprocessar o documento '${filename}' (status INDEXAÇÃO_INVÁLIDA) porque o arquivo PDF original não foi encontrado em storage/documents/.`
+          `Não é possível reprocessar o documento '${filename}' (status ${status}) porque o arquivo PDF original não foi encontrado em storage/documents/.`
         );
       }
 

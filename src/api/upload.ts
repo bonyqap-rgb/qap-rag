@@ -8,6 +8,7 @@ import { createEmbedding } from "../groq/embed.js";
 import { saveKnowledge } from "../services/saveKnowledge.js";
 import { logger } from "../services/logger.service.js";
 import { indexingHistoryService } from "../services/indexing-history.service.js";
+import { supabase } from "../config/supabase.js";
 
 const router = Router();
 
@@ -19,6 +20,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
   const start = performance.now();
   const requestId = req.headers["x-request-id"] as string;
   let fileName = "unknown";
+  let documentId: string | undefined = undefined;
 
   try {
     if (!req.file) {
@@ -42,6 +44,54 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       filename: fileName,
       fileSize: req.file.size,
     });
+
+    // Resolve pre-registered document ID if provided by the client/frontend
+    const documentIdFromReq = req.body.documentId || req.body.id || req.query.documentId || req.headers["x-document-id"];
+    let existingDoc: any = null;
+
+    if (documentIdFromReq) {
+      const { data } = await supabase
+        .from("knowledge_documents")
+        .select("id, status")
+        .eq("id", documentIdFromReq)
+        .maybeSingle();
+      existingDoc = data;
+    }
+
+    if (!existingDoc) {
+      const { data } = await supabase
+        .from("knowledge_documents")
+        .select("id, status")
+        .eq("file_name", fileName)
+        .maybeSingle();
+      existingDoc = data;
+    }
+
+    if (existingDoc) {
+      documentId = existingDoc.id;
+      // Set status to PROCESSANDO immediately in the database
+      await supabase
+        .from("knowledge_documents")
+        .update({
+          status: "PROCESSANDO",
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", documentId);
+    } else {
+      // Create a new document metadata row in PROCESSANDO status
+      const { data, error: insertError } = await supabase
+        .from("knowledge_documents")
+        .insert({
+          file_name: fileName,
+          status: "PROCESSANDO",
+          updated_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+
+      if (insertError) throw insertError;
+      documentId = data.id;
+    }
 
     // Salva o PDF fisicamente em storage/documents/ para suporte a reprocessamento seguro
     try {
@@ -69,11 +119,12 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       embeddings.push(await createEmbedding(chunk));
     }
 
-    // 4. Salvamento unificado com deduplicação de vetores e injeção de metadados
-    const documentId = await saveKnowledge(
+    // 4. Salvamento unificado com deduplicação de vetores e injeção de metadados (passing direct target documentId)
+    const savedDocumentId = await saveKnowledge(
       req.file.originalname,
       chunks,
-      embeddings
+      embeddings,
+      documentId
     );
 
     const duration = parseFloat((performance.now() - start).toFixed(2));
@@ -112,6 +163,21 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       status: "error",
       filename: fileName,
     });
+
+    // Enforce updating document status to INDEXAÇÃO_INVÁLIDA if processing fails
+    if (documentId) {
+      try {
+        await supabase
+          .from("knowledge_documents")
+          .update({
+            status: "INDEXAÇÃO_INVÁLIDA",
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", documentId);
+      } catch (dbErr: any) {
+        logger.error(`[ADMIN] Erro ao atualizar status para INDEXAÇÃO_INVÁLIDA para o documento ${documentId}:`, dbErr);
+      }
+    }
 
     // Record failed indexing history
     await indexingHistoryService.record({

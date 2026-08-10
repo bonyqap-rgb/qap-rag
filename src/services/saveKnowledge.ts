@@ -38,7 +38,8 @@ async function retryWithBackoff<T>(
 export async function saveKnowledge(
   fileName: string,
   rawChunks: string[],
-  embeddings: number[][]
+  embeddings: number[][],
+  targetDocumentId?: string
 ): Promise<string> {
   if (!fileName) throw new Error("O nome do arquivo não foi informado.");
 
@@ -51,14 +52,27 @@ export async function saveKnowledge(
   let persisted = "NÃO";
   let finalStatus = "INDEXAÇÃO_INVÁLIDA";
 
-  // 1. Check if the document already exists in the database to support safe, clean reindexing
-  const { data: existingDoc, error: existingDocError } = await supabase
-    .from("knowledge_documents")
-    .select("id, status")
-    .eq("file_name", fileName)
-    .maybeSingle();
-
   let documentId: string;
+  let existingDoc: any = null;
+
+  // 1. Resolve existing document metadata row to prevent double records
+  if (targetDocumentId) {
+    const { data } = await supabase
+      .from("knowledge_documents")
+      .select("id, status")
+      .eq("id", targetDocumentId)
+      .maybeSingle();
+    existingDoc = data;
+  }
+
+  if (!existingDoc) {
+    const { data } = await supabase
+      .from("knowledge_documents")
+      .select("id, status")
+      .eq("file_name", fileName)
+      .maybeSingle();
+    existingDoc = data;
+  }
 
   if (existingDoc) {
     documentId = existingDoc.id;
@@ -187,15 +201,28 @@ export async function saveKnowledge(
         };
       });
 
-      const chunkInsertCall = async () => {
-        const { error } = await supabase
-          .from("knowledge_chunks")
-          .insert(rows);
+      // Batch insertion of chunk rows to avoid payload limit and timeout issues
+      const batchSize = 50;
+      let insertedAllBatches = true;
 
-        if (error) throw error;
-      };
+      for (let i = 0; i < rows.length; i += batchSize) {
+        const batch = rows.slice(i, i + batchSize);
+        const chunkInsertCall = async () => {
+          const { error } = await supabase
+            .from("knowledge_chunks")
+            .insert(batch);
 
-      await retryWithBackoff(chunkInsertCall, 3, 1000);
+          if (error) throw error;
+        };
+
+        try {
+          await retryWithBackoff(chunkInsertCall, 3, 1000);
+        } catch (batchErr: any) {
+          console.error(`[SAVE KNOWLEDGE] Falha ao inserir lote de chunks (índice ${i}):`, batchErr);
+          insertedAllBatches = false;
+          throw batchErr;
+        }
+      }
 
       // Verify persistence
       const { count: dbChunksCount, error: countErr } = await supabase
@@ -203,7 +230,7 @@ export async function saveKnowledge(
         .select("*", { count: "exact", head: true })
         .eq("document_id", documentId);
 
-      if (!countErr && dbChunksCount === chunksCount && dbChunksCount > 0) {
+      if (!countErr && dbChunksCount === chunksCount && dbChunksCount > 0 && insertedAllBatches) {
         persisted = "SIM";
       }
     }
