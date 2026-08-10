@@ -362,19 +362,9 @@ export class DocumentService {
     let fileExists = false;
     let fileBuffer: Buffer | null = null;
 
-    if (filePath) {
-      try {
-        await fs.access(filePath);
-        fileExists = true;
-        fileBuffer = await fs.readFile(filePath);
-      } catch {
-        fileExists = false;
-      }
-    }
-
-    // Try to download the PDF from Supabase Storage if local copy is not present
-    if (!fileExists && storagePath) {
-      logger.info(`[REINDEX] Arquivo local '${filename}' ausente. Tentando baixar do Supabase Storage: '${storagePath}'...`);
+    // 1. Sempre tentar obter do Supabase Storage primeiro para não depender do filesystem local do Render
+    if (storagePath) {
+      logger.info(`[REINDEX] Tentando baixar PDF diretamente do Supabase Storage: '${storagePath}'...`);
       try {
         let bucket = "documents";
         let pathInBucket = storagePath;
@@ -395,18 +385,30 @@ export class DocumentService {
           fileExists = true;
           logger.info(`[REINDEX] Arquivo '${filename}' baixado com sucesso do Supabase Storage (${fileBuffer.length} bytes).`);
 
-          // Save copy locally to disk
+          // Salvar em cache local opcionalmente
           try {
             const storageDir = path.dirname(filePath);
             await fs.mkdir(storageDir, { recursive: true });
             await fs.writeFile(filePath, fileBuffer);
             logger.info(`[REINDEX] Salvo arquivo localmente no cache: ${filePath}`);
-          } catch (cacheErr: any) {
-            logger.warn(`[REINDEX] Erro ao salvar arquivo baixado localmente no cache: ${cacheErr.message}`);
+          } catch {
+            // Ignorar silenciosamente, já que o Storage é a fonte de verdade principal
           }
         }
       } catch (dlErr: any) {
-        logger.error(`[REINDEX] Erro durante download do PDF do Supabase Storage`, dlErr);
+        logger.error(`[REINDEX] Erro inesperado ao tentar baixar do Supabase Storage`, dlErr);
+      }
+    }
+
+    // 2. Se falhar ou se não tiver storage_path, tentar o filesystem local como fallback secundário
+    if (!fileExists && filePath) {
+      try {
+        await fs.access(filePath);
+        fileExists = true;
+        fileBuffer = await fs.readFile(filePath);
+        logger.info(`[REINDEX] Arquivo PDF recuperado do cache local fallback.`);
+      } catch {
+        fileExists = false;
       }
     }
 

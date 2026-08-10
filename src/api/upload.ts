@@ -45,15 +45,48 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       fileSize: req.file.size,
     });
 
-    // Salva o PDF fisicamente em storage/documents/ para suporte a reprocessamento seguro
+    // 1. Salva o PDF no Supabase Storage (bucket "documents") para suporte a persistência segura entre deploys
+    let storagePath = `documents/${fileName}`;
+    try {
+      logger.info(`[ADMIN] Enviando PDF para o Supabase Storage no caminho: ${storagePath}...`);
+
+      // Tenta criar o bucket se ele não existir
+      try {
+        await supabase.storage.createBucket("documents", {
+          public: false,
+          fileSizeLimit: 52428800 // 50MB
+        });
+      } catch (bucketErr) {
+        // Ignora erro se o bucket já existir
+      }
+
+      const { data: uploadData, error: uploadErr } = await supabase.storage
+        .from("documents")
+        .upload(fileName, req.file.buffer, {
+          contentType: "application/pdf",
+          upsert: true
+        });
+
+      if (uploadErr) {
+        logger.warn(`[ADMIN] Erro ao enviar para o Supabase Storage: ${uploadErr.message}`);
+      } else {
+        logger.info(`[ADMIN] PDF enviado com sucesso para o Supabase Storage.`);
+        if (uploadData?.path) {
+          storagePath = `documents/${uploadData.path}`;
+        }
+      }
+    } catch (storageErr: any) {
+      logger.warn(`[ADMIN] Erro inesperado ao interagir com o Supabase Storage: ${storageErr.message || storageErr}`);
+    }
+
+    // Opcionalmente, mantém uma cópia em cache local de forma efêmera para acesso rápido
     try {
       const storageDir = path.join(process.cwd(), "storage", "documents");
       await fs.mkdir(storageDir, { recursive: true });
       const filePath = path.join(storageDir, fileName);
       await fs.writeFile(filePath, req.file.buffer);
-      logger.info(`[ADMIN] PDF salvo fisicamente em: ${filePath}`);
-    } catch (fsErr: any) {
-      logger.warn(`[ADMIN] Erro ao salvar arquivo PDF físico: ${fsErr.message || fsErr}`);
+    } catch {
+      // Ignora silenciosamente, já que o Supabase Storage é a nossa fonte de verdade principal
     }
 
     // Resolve or find the pre-registered document in database
@@ -88,15 +121,15 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
     const embeddings: number[][] = [];
 
     try {
-      // 1. Parsing robusto de PDF com limpeza e formatação de marcações
+      // 2. Parsing robusto de PDF com limpeza e formatação de marcações
       text = await readPdf(req.file.buffer);
 
-      // 2. Fatiamento inteligente em chunks com conhecimento semântico e tracking de página
+      // 3. Fatiamento inteligente em chunks com conhecimento semântico e tracking de página
       chunks = createChunks(text);
 
       console.log(`[UPLOAD] Gerando ${chunks.length} embeddings para o documento: ${req.file.originalname}`);
 
-      // 3. Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
+      // 4. Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
       for (const chunk of chunks) {
         embeddings.push(await createEmbedding(chunk));
       }
@@ -117,12 +150,13 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       throw processError;
     }
 
-    // 4. Salvamento unificado com deduplicação de vetores e injeção de metadados
+    // 5. Salvamento unificado com deduplicação de vetores e injeção de metadados, passando o storagePath obtido
     const savedDocId = await saveKnowledge(
       req.file.originalname,
       chunks,
       embeddings,
-      documentId
+      documentId,
+      storagePath
     );
 
     const duration = parseFloat((performance.now() - start).toFixed(2));

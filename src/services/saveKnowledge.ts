@@ -34,13 +34,15 @@ async function retryWithBackoff<T>(
  * @param rawChunks - Chunks containing embedded page markers
  * @param embeddings - Generated embedding vectors corresponding to chunks
  * @param documentIdParam - Optional pre-registered document ID
+ * @param storagePathParam - Optional Supabase Storage path of the PDF
  * @returns Saved Document ID
  */
 export async function saveKnowledge(
   fileName: string,
   rawChunks: string[],
   embeddings: number[][],
-  documentIdParam?: string
+  documentIdParam?: string,
+  storagePathParam?: string
 ): Promise<string> {
   if (!fileName) throw new Error("O nome do arquivo não foi informado.");
 
@@ -91,15 +93,19 @@ export async function saveKnowledge(
 
     // remover metadados antigos e atualizar status para PROCESSANDO
     const docUpdateCall = async () => {
+      const updatePayload: any = {
+        status: "PROCESSANDO",
+        total_chunks: 0,
+        total_embeddings: 0,
+        extracted_chars: 0,
+        updated_at: timestamp
+      };
+      if (storagePathParam) {
+        updatePayload.storage_path = storagePathParam;
+      }
       const { data: document, error: documentError } = await supabase
         .from("knowledge_documents")
-        .update({
-          status: "PROCESSANDO",
-          total_chunks: 0,
-          total_embeddings: 0,
-          extracted_chars: 0,
-          updated_at: timestamp
-        })
+        .update(updatePayload)
         .eq("id", finalDocumentId)
         .select()
         .single();
@@ -112,13 +118,17 @@ export async function saveKnowledge(
   } else {
     // Insert the document metadata row with retries in PROCESSANDO status
     const docInsertCall = async () => {
+      const insertPayload: any = {
+        file_name: fileName,
+        status: "PROCESSANDO",
+        updated_at: timestamp
+      };
+      if (storagePathParam) {
+        insertPayload.storage_path = storagePathParam;
+      }
       const { data: document, error: documentError } = await supabase
         .from("knowledge_documents")
-        .insert({
-          file_name: fileName,
-          status: "PROCESSANDO",
-          updated_at: timestamp
-        })
+        .insert(insertPayload)
         .select()
         .single();
 
@@ -260,15 +270,19 @@ export async function saveKnowledge(
     console.log(`Status final: ${finalStatus}`);
 
     // Update document record with final status and metadata in the database
+    const finalUpdatePayload: any = {
+      status: finalStatus,
+      total_chunks: chunksCount,
+      total_embeddings: embeddingsCount,
+      extracted_chars: charsCount,
+      updated_at: timestamp
+    };
+    if (storagePathParam) {
+      finalUpdatePayload.storage_path = storagePathParam;
+    }
     await supabase
       .from("knowledge_documents")
-      .update({
-        status: finalStatus,
-        total_chunks: chunksCount,
-        total_embeddings: embeddingsCount,
-        extracted_chars: charsCount,
-        updated_at: timestamp
-      })
+      .update(finalUpdatePayload)
       .eq("id", finalDocumentId);
 
     const duration = Math.round(performance.now() - startTime);
