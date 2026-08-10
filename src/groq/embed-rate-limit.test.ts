@@ -26,7 +26,7 @@ afterEach(() => {
   groqEmbeddingCircuitBreaker.reset();
 });
 
-test("Embedding Service - 429 rate limit handles retries and throws status 429", async () => {
+test("Embedding Service - 429 rate limit handles retries and throws status 503", async () => {
   let fetchCallCount = 0;
 
   // Mock global fetch to return 429 Rate Limit error
@@ -52,8 +52,8 @@ test("Embedding Service - 429 rate limit handles retries and throws status 429",
       },
       (err: any) => {
         console.log("THE ACTUAL ERROR CAST IN TEST IS:", err);
-        // Confirm the thrown error has status 429
-        assert.strictEqual(err.status, 429);
+        // Confirm the thrown error has status 503 (mapped to prevent client-level 429 confusion)
+        assert.strictEqual(err.status, 503);
         assert.ok(err.message.includes("Mocked 429 Error"));
         return true;
       }

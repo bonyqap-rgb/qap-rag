@@ -1,7 +1,7 @@
 import { DocumentRepository } from "../repositories/document.repository.js";
 import { Document, DocumentProcessingStatus } from "../models/document.model.js";
 import { supabase } from "../config/supabase.js";
-import { createEmbedding } from "../groq/embed.js";
+import { createEmbedding, createEmbeddings } from "../groq/embed.js";
 import { indexingHistoryService } from "./indexing-history.service.js";
 import { logger } from "./logger.service.js";
 import fs from "fs/promises";
@@ -433,11 +433,8 @@ export class DocumentService {
         // 3. Fatiar em chunks semânticos
         const chunksList = createChunks(text);
 
-        // 4. Gerar novos embeddings de 1536 dimensões
-        const embeddings: number[][] = [];
-        for (const chunk of chunksList) {
-          embeddings.push(await createEmbedding(chunk));
-        }
+        // 4. Gerar novos embeddings de 1536 dimensões em lote com controle de concorrência
+        const embeddings = await createEmbeddings(chunksList);
 
         // 5. Gravar novamente, Validar e Marcar como INDEXADO através de saveKnowledge
         const updatedDocId = await saveKnowledge(filename, chunksList, embeddings);
@@ -495,25 +492,23 @@ export class DocumentService {
     const timestamp = new Date().toISOString();
 
     try {
-      const newChunksData = [];
-
-      for (const chunk of chunks) {
+      const cleanTexts = chunks.map(chunk => {
         let cleanText = chunk.content || "";
         const metaMatch = cleanText.match(/^\[METADATA:[\s\S]*?\]\n([\s\S]*)$/);
         if (metaMatch) {
           cleanText = metaMatch[1];
         }
-        cleanText = cleanText.trim();
+        return cleanText.trim();
+      });
 
-        // Regenerate embedding vector
-        const embedding = await createEmbedding(cleanText);
+      // Regenerar embeddings em lote com controle de concorrência
+      const generatedEmbeddings = await createEmbeddings(cleanTexts);
 
-        newChunksData.push({
-          chunk_index: chunk.chunk_index,
-          content: chunk.content,
-          embedding,
-        });
-      }
+      const newChunksData = chunks.map((chunk, i) => ({
+        chunk_index: chunk.chunk_index,
+        content: chunk.content,
+        embedding: generatedEmbeddings[i],
+      }));
 
       // Try RPC transaction update
       const rpcData = newChunksData.map(c => {

@@ -4,7 +4,7 @@ import fs from "fs/promises";
 import path from "path";
 import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
-import { createEmbedding } from "../groq/embed.js";
+import { createEmbedding, createEmbeddings } from "../groq/embed.js";
 import { saveKnowledge } from "../services/saveKnowledge.js";
 import { logger } from "../services/logger.service.js";
 import { indexingHistoryService } from "../services/indexing-history.service.js";
@@ -185,12 +185,11 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       // Fatiamento inteligente em chunks com conhecimento semântico e tracking de página
       chunks = createChunks(text);
 
-      console.log(`[UPLOAD] Gerando ${chunks.length} embeddings para o documento: ${req.file.originalname}`);
+      console.log(`[UPLOAD] Gerando ${chunks.length} embeddings em lote com controle de concorrência para o documento: ${req.file.originalname}`);
 
-      // Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
-      for (const chunk of chunks) {
-        embeddings.push(await createEmbedding(chunk));
-      }
+      // Geração robusta de embeddings em lote com controle de concorrência, retentativas e cache
+      const batchEmbeddings = await createEmbeddings(chunks);
+      embeddings.push(...batchEmbeddings);
     } catch (processError: any) {
       // If error occurs during parsing, chunking or embedding generation, transition status to INDEXAÇÃO_INVÁLIDA
       if (documentId) {

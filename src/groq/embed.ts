@@ -3,6 +3,7 @@ import Groq from "groq-sdk";
 import { env } from "../config/env.js";
 import { embeddingCache, generateHashKey } from "../services/cache.service.js";
 import { groqEmbeddingCircuitBreaker } from "../services/circuit-breaker.service.js";
+import { logger } from "../services/logger.service.js";
 
 dotenv.config();
 
@@ -70,7 +71,10 @@ async function retryWithBackoff<T>(
 
       if (attempt >= limit) {
         if (is429) {
-          error.status = 429; // Set status property to 429 for the Express error handler
+          // Set status property to 503 (Service Unavailable) instead of 429
+          // so the client receives the real error cause without falsely thinking
+          // our own system's upload rate limit has been exceeded.
+          error.status = 503;
         }
         throw error;
       }
@@ -92,173 +96,229 @@ async function retryWithBackoff<T>(
 }
 
 /**
- * Default internal implementation for embedding generation.
+ * Default internal implementation for batch embedding generation with concurrency control.
  */
-async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
-  if (!text || typeof text !== "string" || text.trim() === "") {
-    throw new Error("O texto para geração de embedding não pode ser vazio.");
+async function defaultEmbeddingsImplementation(texts: string[]): Promise<number[][]> {
+  if (!texts || !Array.isArray(texts) || texts.length === 0) {
+    return [];
   }
 
-  const normalizedText = text.trim();
-  const cacheKey = generateHashKey(normalizedText);
+  const results: number[][] = new Array(texts.length);
+  const uncachedIndices: number[] = [];
+  const uncachedTexts: string[] = [];
 
-  // Return cached result if already computed to avoid redundant API queries
-  const cached = embeddingCache.get(cacheKey);
-  if (cached) {
-    console.log(`[EMBEDDING CACHE] Retornando vetor em cache para: "${normalizedText.substring(0, 30)}..." - dimensão cached: ${cached.length}`);
-    let finalCached = [...cached];
-    const targetDimension = 1536;
-    if (finalCached.length !== targetDimension) {
-      console.warn(`[EMBEDDING CACHE] Vetor em cache com dimensão incorreta: ${finalCached.length}. Forçando ajuste para ${targetDimension}...`);
-      if (finalCached.length > targetDimension) {
-        finalCached = finalCached.slice(0, targetDimension);
-      } else {
-        while (finalCached.length < targetDimension) {
-          finalCached.push(0);
+  // 1. Check cache first to avoid redundant API hits and optimize costs/speed
+  for (let i = 0; i < texts.length; i++) {
+    const text = texts[i];
+    if (!text || typeof text !== "string" || text.trim() === "") {
+      results[i] = Array(1536).fill(0);
+      continue;
+    }
+
+    const normalizedText = text.trim();
+    const cacheKey = generateHashKey(normalizedText);
+
+    const cached = embeddingCache.get(cacheKey);
+    if (cached) {
+      let finalCached = [...cached];
+      const targetDimension = 1536;
+      if (finalCached.length !== targetDimension) {
+        if (finalCached.length > targetDimension) {
+          finalCached = finalCached.slice(0, targetDimension);
+        } else {
+          while (finalCached.length < targetDimension) {
+            finalCached.push(0);
+          }
         }
       }
-      embeddingCache.set(cacheKey, finalCached);
+      results[i] = finalCached;
+    } else {
+      uncachedIndices.push(i);
+      uncachedTexts.push(normalizedText);
     }
-    console.log(`[EMBEDDING] dimensão após qualquer transformação (do cache): ${finalCached.length}`);
-    return finalCached;
   }
 
-  // Define the core API operation with timeout protection
-  const apiCall = () =>
-    withTimeout(
-      (async () => {
-        if (env.VOYAGE_API_KEY) {
-          const res = await fetch("https://api.voyageai.com/v1/embeddings", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${env.VOYAGE_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              input: [normalizedText],
-              model: process.env.VOYAGE_EMBED_MODEL || "voyage-3",
-            }),
-          });
-          if (!res.ok) {
-            const errText = await res.text();
-            const err = new Error(`Erro na API do Voyage AI (${res.status}): ${errText}`);
-            if (res.status === 429) (err as any).status = 429;
-            throw err;
-          }
-          const data = await res.json() as any;
-          const embedding = data.data?.[0]?.embedding;
-          if (!embedding) {
-            throw new Error("Resposta da API de embedding do Voyage AI inválida ou vazia.");
-          }
-          console.log(`[VOYAGE AI] dimensão original recebida da API: ${embedding.length}`);
-          return embedding;
-        } else if (env.NOMIC_API_KEY) {
-          const res = await fetch("https://api-atlas.nomic.ai/v1/embedding/text", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${env.NOMIC_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: process.env.NOMIC_EMBED_MODEL || "nomic-embed-text-v1.5",
-              texts: [normalizedText],
-              task_type: "search_document",
-            }),
-          });
-          if (!res.ok) {
-            const errText = await res.text();
-            const err = new Error(`Erro na API do Nomic (${res.status}): ${errText}`);
-            if (res.status === 429) (err as any).status = 429;
-            throw err;
-          }
-          const data = await res.json() as any;
-          const embedding = data.embeddings?.[0];
-          if (!embedding) {
-            throw new Error("Resposta da API de embedding do Nomic inválida ou vazia.");
-          }
-          console.log(`[NOMIC] dimensão original recebida da API: ${embedding.length}`);
-          return embedding;
-        } else if (env.GROQ_API_KEY) {
-          // Generate embeddings using Groq SDK nomic-embed-text-v1_5 model as fallback/primary
-          try {
-            const response = await groq.embeddings.create({
-              model: process.env.GROQ_EMBED_MODEL || "nomic-embed-text-v1_5",
-              input: normalizedText,
+  if (uncachedTexts.length === 0) {
+    return results;
+  }
+
+  // 2. Divide the uncached texts into small batches to respect provider Token Rate Limits (TPM)
+  const BATCH_SIZE = 15;
+  const batches: string[][] = [];
+  for (let i = 0; i < uncachedTexts.length; i += BATCH_SIZE) {
+    batches.push(uncachedTexts.slice(i, i + BATCH_SIZE));
+  }
+
+  logger.info(`[EMBEDDING] Processando ${uncachedTexts.length} chunks não cacheados em ${batches.length} lotes de tamanho ${BATCH_SIZE}.`);
+
+  // 3. Process batches with a controlled concurrency limit of 2 parallel requests to prevent concurrent request spikes (RPM)
+  const CONCURRENCY_LIMIT = 2;
+  const fetchedEmbeddings: number[][] = new Array(uncachedTexts.length);
+
+  const processBatch = async (batchTexts: string[], batchIndex: number): Promise<number[][]> => {
+    const apiCall = () =>
+      withTimeout(
+        (async () => {
+          if (env.VOYAGE_API_KEY) {
+            const res = await fetch("https://api.voyageai.com/v1/embeddings", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${env.VOYAGE_API_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                input: batchTexts,
+                model: process.env.VOYAGE_EMBED_MODEL || "voyage-3",
+              }),
             });
-            const embedding = response.data?.[0]?.embedding;
-            if (!embedding) {
-              throw new Error("Resposta da API de embedding do Groq inválida ou vazia.");
+            if (!res.ok) {
+              const errText = await res.text();
+              const err = new Error(`Erro na API do Voyage AI (${res.status}): ${errText}`);
+              if (res.status === 429) (err as any).status = 429;
+              throw err;
             }
-            console.log(`[GROQ] dimensão original recebida da API: ${embedding.length}`);
-            return embedding;
-          } catch (groqErr: any) {
-            if (groqErr.status === 429) {
-              groqErr.status = 429; // propagate status 429 explicitly
+            const data = await res.json() as any;
+            const embeddings = data.data?.map((d: any) => d.embedding);
+            if (!embeddings || embeddings.length !== batchTexts.length) {
+              throw new Error("Resposta da API de embedding do Voyage AI inválida ou incompleta.");
             }
-            throw groqErr;
+            return embeddings;
+          } else if (env.NOMIC_API_KEY) {
+            const res = await fetch("https://api-atlas.nomic.ai/v1/embedding/text", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${env.NOMIC_API_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: process.env.NOMIC_EMBED_MODEL || "nomic-embed-text-v1.5",
+                texts: batchTexts,
+                task_type: "search_document",
+              }),
+            });
+            if (!res.ok) {
+              const errText = await res.text();
+              const err = new Error(`Erro na API do Nomic (${res.status}): ${errText}`);
+              if (res.status === 429) (err as any).status = 429;
+              throw err;
+            }
+            const data = await res.json() as any;
+            const embeddings = data.embeddings;
+            if (!embeddings || embeddings.length !== batchTexts.length) {
+              throw new Error("Resposta da API de embedding do Nomic inválida ou incompleta.");
+            }
+            return embeddings;
+          } else if (env.GROQ_API_KEY) {
+            try {
+              const response = await groq.embeddings.create({
+                model: process.env.GROQ_EMBED_MODEL || "nomic-embed-text-v1_5",
+                input: batchTexts,
+              });
+              const embeddings = response.data?.map((d: any) => d.embedding);
+              if (!embeddings || embeddings.length !== batchTexts.length) {
+                throw new Error("Resposta da API de embedding do Groq inválida ou incompleta.");
+              }
+              return embeddings;
+            } catch (groqErr: any) {
+              if (groqErr.status === 429) {
+                groqErr.status = 429;
+              }
+              throw groqErr;
+            }
+          } else {
+            throw new Error("Provedor de embedding não configurado.");
           }
-        } else {
-          throw new Error("Provedor de embedding não configurado. Defina VOYAGE_API_KEY, NOMIC_API_KEY ou GROQ_API_KEY no arquivo .env.");
-        }
-      })(),
-      env.LLM_TIMEOUT
+        })(),
+        env.LLM_TIMEOUT
+      );
+
+    return await groqEmbeddingCircuitBreaker.execute(() =>
+      retryWithBackoff(apiCall, env.LLM_RETRIES, env.LLM_RETRY_DELAY)
     );
+  };
 
-  // Execute the API call inside the Circuit Breaker with exponential backoff retry on transient issues
-  const embeddingData = await groqEmbeddingCircuitBreaker.execute(() =>
-    retryWithBackoff(apiCall, env.LLM_RETRIES, env.LLM_RETRY_DELAY)
-  );
+  // Run the batch operations with controlled concurrency
+  for (let i = 0; i < batches.length; i += CONCURRENCY_LIMIT) {
+    const chunkOfBatches = batches.slice(i, i + CONCURRENCY_LIMIT);
+    const promises = chunkOfBatches.map((batchTexts, idx) => {
+      const actualBatchIndex = i + idx;
+      return processBatch(batchTexts, actualBatchIndex);
+    });
 
-  // Validate the resulting embedding vector
-  if (!embeddingData || !Array.isArray(embeddingData) || embeddingData.length === 0) {
-    throw new Error("Resposta da API de embedding inválida ou vazia.");
+    const batchResults = await Promise.all(promises);
+
+    // Map batch results back to the fetchedEmbeddings array
+    batchResults.forEach((embeddingsList, batchIdx) => {
+      const actualBatchIndex = i + batchIdx;
+      const startOffset = actualBatchIndex * BATCH_SIZE;
+      embeddingsList.forEach((emb, textIdx) => {
+        fetchedEmbeddings[startOffset + textIdx] = emb;
+      });
+    });
   }
 
-  const originalDimension = embeddingData.length;
-  console.log(`[EMBEDDING] dimensão original recebida da API: ${originalDimension}`);
+  // 4. Standardize embedding vectors to 1536 dimensions and update cache
+  for (let i = 0; i < uncachedTexts.length; i++) {
+    const text = uncachedTexts[i];
+    const cacheKey = generateHashKey(text);
+    const rawEmb = fetchedEmbeddings[i];
 
-  // Adjust the embedding vector to be exactly 1536 dimensions for perfect pgvector compatibility.
-  // Truncate if larger (e.g., 3072 dimensions) or pad with zeros if smaller (e.g., 768 or 1024 dimensions).
-  const targetDimension = 1536;
-  let finalEmbedding = [...embeddingData];
-  if (finalEmbedding.length > targetDimension) {
-    finalEmbedding = finalEmbedding.slice(0, targetDimension);
-  } else {
-    while (finalEmbedding.length < targetDimension) {
-      finalEmbedding.push(0);
+    if (!rawEmb || !Array.isArray(rawEmb) || rawEmb.length === 0) {
+      throw new Error(`Falha ao obter embedding para o trecho: "${text.substring(0, 30)}..."`);
     }
+
+    const targetDimension = 1536;
+    let finalEmbedding = [...rawEmb];
+    if (finalEmbedding.length > targetDimension) {
+      finalEmbedding = finalEmbedding.slice(0, targetDimension);
+    } else {
+      while (finalEmbedding.length < targetDimension) {
+        finalEmbedding.push(0);
+      }
+    }
+
+    // Set in cache
+    embeddingCache.set(cacheKey, finalEmbedding);
+
+    // Assign to the correct original index
+    const originalIndex = uncachedIndices[i];
+    results[originalIndex] = finalEmbedding;
   }
 
-  console.log(`[EMBEDDING] dimensão após qualquer transformação: ${finalEmbedding.length}`);
-
-  // Populate cache for subsequent operations
-  embeddingCache.set(cacheKey, finalEmbedding);
-
-  return finalEmbedding;
+  return results;
 }
 
 // Live binding/re-assignment container for tests in ESM
-let embeddingImplementation = defaultEmbeddingImplementation;
+let embeddingsImplementation = defaultEmbeddingsImplementation;
 
-export function setEmbeddingImplementation(fn: typeof defaultEmbeddingImplementation) {
-  embeddingImplementation = fn;
+export function setEmbeddingImplementation(fn: (text: string) => Promise<number[]>) {
+  embeddingsImplementation = async (texts: string[]) => {
+    const promises = texts.map(t => fn(t));
+    return await Promise.all(promises);
+  };
 }
 
 export function resetEmbeddingImplementation() {
-  embeddingImplementation = defaultEmbeddingImplementation;
+  embeddingsImplementation = defaultEmbeddingsImplementation;
 }
 
 /**
- * Generates an embedding vector for a given piece of text using Groq's nomic-embed-text-v1_5 model.
- * Since the database/pgvector is set to 1536 dimensions,
- * we pad the 768-dimensional Nomic embedding with 768 trailing zeros to reach 1536 dimensions.
- * This guarantees perfect database compatibility without altering tables, schemas, or existing data.
+ * Generates embedding vectors for a list of texts in batches with controlled concurrency.
  *
- * Implements validation, caching, API timeouts, and transient error backoff retries.
+ * @param texts - Array of input strings
+ * @returns Array of embedding vector arrays of 1536 numbers
+ */
+export async function createEmbeddings(texts: string[]): Promise<number[][]> {
+  return embeddingsImplementation(texts);
+}
+
+/**
+ * Generates an embedding vector for a given piece of text using the batched implementation.
  *
  * @param text - Input string
  * @returns Embedding vector array of 1536 numbers
  */
 export async function createEmbedding(text: string): Promise<number[]> {
-  return embeddingImplementation(text);
+  const res = await createEmbeddings([text]);
+  return res[0] ?? Array(1536).fill(0);
 }
