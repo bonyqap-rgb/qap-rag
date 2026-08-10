@@ -33,12 +33,14 @@ async function retryWithBackoff<T>(
  * @param fileName - Original PDF document name
  * @param rawChunks - Chunks containing embedded page markers
  * @param embeddings - Generated embedding vectors corresponding to chunks
+ * @param documentIdParam - Optional pre-registered document ID
  * @returns Saved Document ID
  */
 export async function saveKnowledge(
   fileName: string,
   rawChunks: string[],
-  embeddings: number[][]
+  embeddings: number[][],
+  documentIdParam?: string
 ): Promise<string> {
   if (!fileName) throw new Error("O nome do arquivo não foi informado.");
 
@@ -52,22 +54,40 @@ export async function saveKnowledge(
   let finalStatus = "INDEXAÇÃO_INVÁLIDA";
 
   // 1. Check if the document already exists in the database to support safe, clean reindexing
-  const { data: existingDoc, error: existingDocError } = await supabase
-    .from("knowledge_documents")
-    .select("id, status")
-    .eq("file_name", fileName)
-    .maybeSingle();
+  let existingDoc = null;
 
-  let documentId: string;
+  if (documentIdParam) {
+    const { data, error } = await supabase
+      .from("knowledge_documents")
+      .select("id, status")
+      .eq("id", documentIdParam)
+      .maybeSingle();
+    if (!error && data) {
+      existingDoc = data;
+    }
+  }
+
+  if (!existingDoc) {
+    const { data, error } = await supabase
+      .from("knowledge_documents")
+      .select("id, status")
+      .eq("file_name", fileName)
+      .maybeSingle();
+    if (!error && data) {
+      existingDoc = data;
+    }
+  }
+
+  let finalDocumentId: string;
 
   if (existingDoc) {
-    documentId = existingDoc.id;
+    finalDocumentId = existingDoc.id;
 
     // remover chunks antigos e remover embeddings antigos
     await supabase
       .from("knowledge_chunks")
       .delete()
-      .eq("document_id", documentId);
+      .eq("document_id", finalDocumentId);
 
     // remover metadados antigos e atualizar status para PROCESSANDO
     const docUpdateCall = async () => {
@@ -80,7 +100,7 @@ export async function saveKnowledge(
           extracted_chars: 0,
           updated_at: timestamp
         })
-        .eq("id", documentId)
+        .eq("id", finalDocumentId)
         .select()
         .single();
 
@@ -107,7 +127,7 @@ export async function saveKnowledge(
     };
 
     const document = await retryWithBackoff(docInsertCall, 3, 1000);
-    documentId = document.id;
+    finalDocumentId = document.id;
   }
 
   try {
@@ -154,7 +174,7 @@ export async function saveKnowledge(
       await supabase
         .from("knowledge_chunks")
         .delete()
-        .eq("document_id", documentId);
+        .eq("document_id", finalDocumentId);
 
       const rows = processedChunks.map((pc, index) => {
         const metadataHeader = JSON.stringify({
@@ -180,28 +200,34 @@ export async function saveKnowledge(
         }
 
         return {
-          document_id: documentId,
+          document_id: finalDocumentId,
           chunk_index: index,
           content: enrichedContent,
           embedding: finalChunkEmbedding,
         };
       });
 
-      const chunkInsertCall = async () => {
-        const { error } = await supabase
-          .from("knowledge_chunks")
-          .insert(rows);
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+        const batch = rows.slice(i, i + BATCH_SIZE);
+        console.log(`[SAVE KNOWLEDGE] Gravando lote de chunks ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(rows.length / BATCH_SIZE)} (tamanho: ${batch.length})...`);
 
-        if (error) throw error;
-      };
+        const chunkInsertCall = async () => {
+          const { error } = await supabase
+            .from("knowledge_chunks")
+            .insert(batch);
 
-      await retryWithBackoff(chunkInsertCall, 3, 1000);
+          if (error) throw error;
+        };
+
+        await retryWithBackoff(chunkInsertCall, 3, 1000);
+      }
 
       // Verify persistence
       const { count: dbChunksCount, error: countErr } = await supabase
         .from("knowledge_chunks")
         .select("*", { count: "exact", head: true })
-        .eq("document_id", documentId);
+        .eq("document_id", finalDocumentId);
 
       if (!countErr && dbChunksCount === chunksCount && dbChunksCount > 0) {
         persisted = "SIM";
@@ -243,7 +269,7 @@ export async function saveKnowledge(
         extracted_chars: charsCount,
         updated_at: timestamp
       })
-      .eq("id", documentId);
+      .eq("id", finalDocumentId);
 
     const duration = Math.round(performance.now() - startTime);
 
@@ -262,5 +288,5 @@ export async function saveKnowledge(
     }
   }
 
-  return documentId;
+  return finalDocumentId;
 }

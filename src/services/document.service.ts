@@ -319,13 +319,14 @@ export class DocumentService {
     let kDocId: string | null = null;
     let filename = "";
     let status = "";
+    let storagePath = "";
 
     // Try to find corresponding knowledge document directly from knowledge_documents table
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
     if (isUuid) {
       const { data: kDoc, error: kDocError } = await supabase
         .from("knowledge_documents")
-        .select("id, file_name, status")
+        .select("id, file_name, status, storage_path")
         .eq("id", id)
         .maybeSingle();
 
@@ -333,6 +334,7 @@ export class DocumentService {
         kDocId = kDoc.id;
         filename = kDoc.file_name || "";
         status = kDoc.status || "";
+        storagePath = kDoc.storage_path || "";
       }
     }
 
@@ -340,7 +342,7 @@ export class DocumentService {
       // Try to find by file_name in knowledge_documents
       const { data: kDoc, error: kDocError } = await supabase
         .from("knowledge_documents")
-        .select("id, file_name, status")
+        .select("id, file_name, status, storage_path")
         .eq("file_name", id)
         .maybeSingle();
 
@@ -348,6 +350,7 @@ export class DocumentService {
         kDocId = kDoc.id;
         filename = kDoc.file_name || "";
         status = kDoc.status || "";
+        storagePath = kDoc.storage_path || "";
       }
     }
 
@@ -357,21 +360,62 @@ export class DocumentService {
 
     const filePath = filename ? path.join(process.cwd(), "storage", "documents", filename) : "";
     let fileExists = false;
+    let fileBuffer: Buffer | null = null;
+
     if (filePath) {
       try {
         await fs.access(filePath);
         fileExists = true;
+        fileBuffer = await fs.readFile(filePath);
       } catch {
         fileExists = false;
       }
     }
 
-    // Se o status do documento for INDEXAÇÃO_INVÁLIDA ou o arquivo físico do PDF existir no disco,
+    // Try to download the PDF from Supabase Storage if local copy is not present
+    if (!fileExists && storagePath) {
+      logger.info(`[REINDEX] Arquivo local '${filename}' ausente. Tentando baixar do Supabase Storage: '${storagePath}'...`);
+      try {
+        let bucket = "documents";
+        let pathInBucket = storagePath;
+
+        if (storagePath.includes("/")) {
+          const parts = storagePath.split("/");
+          bucket = parts[0];
+          pathInBucket = parts.slice(1).join("/");
+        }
+
+        const { data: storageData, error: storageErr } = await supabase.storage.from(bucket).download(pathInBucket);
+
+        if (storageErr) {
+          logger.warn(`[REINDEX] Falha ao baixar de Supabase Storage (bucket: ${bucket}, path: ${pathInBucket}): ${storageErr.message}`);
+        } else if (storageData) {
+          const arrayBuffer = await storageData.arrayBuffer();
+          fileBuffer = Buffer.from(arrayBuffer);
+          fileExists = true;
+          logger.info(`[REINDEX] Arquivo '${filename}' baixado com sucesso do Supabase Storage (${fileBuffer.length} bytes).`);
+
+          // Save copy locally to disk
+          try {
+            const storageDir = path.dirname(filePath);
+            await fs.mkdir(storageDir, { recursive: true });
+            await fs.writeFile(filePath, fileBuffer);
+            logger.info(`[REINDEX] Salvo arquivo localmente no cache: ${filePath}`);
+          } catch (cacheErr: any) {
+            logger.warn(`[REINDEX] Erro ao salvar arquivo baixado localmente no cache: ${cacheErr.message}`);
+          }
+        }
+      } catch (dlErr: any) {
+        logger.error(`[REINDEX] Erro durante download do PDF do Supabase Storage`, dlErr);
+      }
+    }
+
+    // Se o status do documento for INDEXAÇÃO_INVÁLIDA, PENDENTE ou o arquivo físico do PDF existir no disco,
     // devemos reprocessar o arquivo original do início para garantir reindexação segura.
-    if (status === "INDEXAÇÃO_INVÁLIDA" || fileExists) {
+    if (status === "INDEXAÇÃO_INVÁLIDA" || status === "PENDENTE" || fileExists) {
       if (!fileExists) {
         throw new ValidationError(
-          `Não é possível reprocessar o documento '${filename}' (status INDEXAÇÃO_INVÁLIDA) porque o arquivo PDF original não foi encontrado em storage/documents/.`
+          `Não é possível reprocessar o documento '${filename}' (status ${status}) porque o arquivo PDF original não foi encontrado em storage/documents/ nem no Supabase Storage.`
         );
       }
 
@@ -380,8 +424,8 @@ export class DocumentService {
       const timestamp = new Date().toISOString();
 
       try {
-        // 1. Reprocessar o PDF: Ler o buffer do arquivo PDF original do disco
-        const pdfBuffer = await fs.readFile(filePath);
+        // 1. Reprocessar o PDF: Ler o buffer do arquivo PDF original do disco ou do Storage
+        const pdfBuffer = fileBuffer || await fs.readFile(filePath);
 
         // 2. Extrair o texto do PDF
         const text = await readPdf(pdfBuffer);

@@ -8,6 +8,7 @@ import { createEmbedding } from "../groq/embed.js";
 import { saveKnowledge } from "../services/saveKnowledge.js";
 import { logger } from "../services/logger.service.js";
 import { indexingHistoryService } from "../services/indexing-history.service.js";
+import { supabase } from "../config/supabase.js";
 
 const router = Router();
 
@@ -19,6 +20,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
   const start = performance.now();
   const requestId = req.headers["x-request-id"] as string;
   let fileName = "unknown";
+  let documentId = (req.body?.documentId || req.query?.documentId) as string | undefined;
 
   try {
     if (!req.file) {
@@ -54,26 +56,73 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       logger.warn(`[ADMIN] Erro ao salvar arquivo PDF físico: ${fsErr.message || fsErr}`);
     }
 
-    // 1. Parsing robusto de PDF com limpeza e formatação de marcações
-    const text = await readPdf(req.file.buffer);
+    // Resolve or find the pre-registered document in database
+    if (!documentId) {
+      const { data: existingDoc } = await supabase
+        .from("knowledge_documents")
+        .select("id")
+        .eq("file_name", fileName)
+        .maybeSingle();
+      if (existingDoc) {
+        documentId = existingDoc.id;
+      }
+    }
 
-    // 2. Fatiamento inteligente em chunks com conhecimento semântico e tracking de página
-    const chunks = createChunks(text);
+    // Instantly transition the record status to PROCESSANDO on start and reset metrics
+    if (documentId) {
+      await supabase
+        .from("knowledge_documents")
+        .update({
+          status: "PROCESSANDO",
+          total_chunks: 0,
+          total_embeddings: 0,
+          extracted_chars: 0,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", documentId);
+      logger.info(`[UPLOAD] Documento ${fileName} (ID: ${documentId}) marcado como PROCESSANDO no início.`);
+    }
 
+    let text = "";
+    let chunks: string[] = [];
     const embeddings: number[][] = [];
 
-    console.log(`[UPLOAD] Gerando ${chunks.length} embeddings para o documento: ${req.file.originalname}`);
+    try {
+      // 1. Parsing robusto de PDF com limpeza e formatação de marcações
+      text = await readPdf(req.file.buffer);
 
-    // 3. Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
-    for (const chunk of chunks) {
-      embeddings.push(await createEmbedding(chunk));
+      // 2. Fatiamento inteligente em chunks com conhecimento semântico e tracking de página
+      chunks = createChunks(text);
+
+      console.log(`[UPLOAD] Gerando ${chunks.length} embeddings para o documento: ${req.file.originalname}`);
+
+      // 3. Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
+      for (const chunk of chunks) {
+        embeddings.push(await createEmbedding(chunk));
+      }
+    } catch (processError: any) {
+      // If error occurs during parsing, chunking or embedding generation, transition status to INDEXAÇÃO_INVÁLIDA
+      if (documentId) {
+        await supabase
+          .from("knowledge_documents")
+          .update({
+            status: "INDEXAÇÃO_INVÁLIDA",
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", documentId);
+        logger.warn(`[UPLOAD] Documento ${fileName} (ID: ${documentId}) marcado como INDEXAÇÃO_INVÁLIDA devido a falha no processamento.`, {
+          error: processError.message || String(processError)
+        });
+      }
+      throw processError;
     }
 
     // 4. Salvamento unificado com deduplicação de vetores e injeção de metadados
-    const documentId = await saveKnowledge(
+    const savedDocId = await saveKnowledge(
       req.file.originalname,
       chunks,
-      embeddings
+      embeddings,
+      documentId
     );
 
     const duration = parseFloat((performance.now() - start).toFixed(2));
@@ -98,7 +147,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
 
     return res.json({
       success: true,
-      documentId,
+      documentId: savedDocId,
       fileName: req.file.originalname,
       characters: text.length,
       chunks: chunks.length,

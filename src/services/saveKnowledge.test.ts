@@ -99,6 +99,88 @@ test("saveKnowledge - valid document", async () => {
   }
 });
 
+test("saveKnowledge - prioritized lookup by documentIdParam", async () => {
+  const originalFrom = supabase.from;
+  const updatedDoc = { payload: null as any };
+  const insertedChunks: any[] = [];
+  let lookupId: string | null = null;
+
+  const mockSupabaseWithTracking = (table: string): any => {
+    const builder: any = {
+      select: (selectField: any, selectOpts: any) => {
+        if (selectOpts && selectOpts.count === "exact") {
+          return {
+            eq: () => Promise.resolve({ count: 2, error: null })
+          };
+        }
+        return {
+          eq: (field: string, val: any) => {
+            if (field === "id") {
+              lookupId = val;
+            }
+            return {
+              maybeSingle: () => Promise.resolve({ data: { id: "priority-id-999", status: "PENDENTE" }, error: null })
+            };
+          },
+          maybeSingle: () => Promise.resolve({ data: { id: "priority-id-999", status: "PENDENTE" }, error: null })
+        };
+      },
+      insert: (payload: any) => {
+        if (table === "knowledge_chunks") {
+          insertedChunks.push(...(Array.isArray(payload) ? payload : [payload]));
+          return Promise.resolve({ error: null });
+        }
+        return {
+          select: () => ({
+            single: () => Promise.resolve({ data: { id: "priority-id-999", file_name: "custom_doc.pdf" }, error: null })
+          })
+        };
+      },
+      update: (payload: any) => {
+        updatedDoc.payload = payload;
+        return {
+          eq: () => {
+            const res = {
+              select: () => ({
+                single: () => Promise.resolve({ data: { id: "priority-id-999", file_name: "custom_doc.pdf" }, error: null })
+              }),
+              then: (cb: any) => Promise.resolve({ error: null }).then(cb)
+            };
+            return res as any;
+          }
+        };
+      },
+      delete: () => {
+        return {
+          eq: () => Promise.resolve({ error: null })
+        };
+      },
+      eq: () => {
+        return builder;
+      }
+    };
+    return builder;
+  };
+
+  supabase.from = mockSupabaseWithTracking;
+
+  try {
+    const rawChunks = ["[PAGE:1] Primeiro chunk do PDF", "[PAGE:2] Segundo chunk do PDF"];
+    const embeddings = [
+      Array(1536).fill(0.3),
+      Array(1536).fill(0.4)
+    ];
+
+    const docId = await saveKnowledge("custom_doc.pdf", rawChunks, embeddings, "priority-id-999");
+
+    assert.strictEqual(docId, "priority-id-999");
+    assert.strictEqual(lookupId, "priority-id-999");
+    assert.strictEqual(updatedDoc.payload?.status, "INDEXADO");
+  } finally {
+    supabase.from = originalFrom;
+  }
+});
+
 test("saveKnowledge - document with no text (empty chunks)", async () => {
   const originalFrom = supabase.from;
   const updatedDoc = { payload: null as any };
