@@ -9,7 +9,8 @@
     "build": "tsc",
     "test": "SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_ROLE_KEY=dummy_key GROQ_API_KEY=dummy_key node --import tsx --test src/**/*.test.ts",
     "migrate-vectors": "tsx src/scripts/migrate-vectors.ts",
-    "rag:evaluate": "SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_ROLE_KEY=dummy_key GROQ_API_KEY=dummy_key tsx src/scripts/evaluate-rag.ts"
+    "rag:evaluate": "SUPABASE_URL=http://localhost:54321 SUPABASE_SERVICE_ROLE_KEY=dummy_key GROQ_API_KEY=dummy_key tsx src/scripts/evaluate-rag.ts",
+    "rag:inspect": "tsx src/scripts/inspect-rag.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.8",
