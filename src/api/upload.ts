@@ -56,7 +56,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       logger.warn(`[ADMIN] Erro ao salvar arquivo PDF físico: ${fsErr.message || fsErr}`);
     }
 
-    // Resolve or find the pre-registered document in database
+    // Resolve or find pre-registered document ID first
     if (!documentId) {
       const { data: existingDoc } = await supabase
         .from("knowledge_documents")
@@ -68,11 +68,79 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       }
     }
 
-    // Instantly transition the record status to PROCESSANDO on start and reset metrics
+    // 1. Garantir que o bucket de armazenamento exista no Supabase Storage
+    try {
+      const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+      if (listError) {
+        logger.warn(`[UPLOAD] Erro ao listar buckets: ${listError.message}`);
+      } else {
+        const bucketExists = buckets?.some(b => b.name === "documents");
+        if (!bucketExists) {
+          logger.info(`[UPLOAD] Bucket 'documents' não existe. Criando bucket privado...`);
+          const { error: createError } = await supabase.storage.createBucket("documents", {
+            public: false,
+            allowedMimeTypes: ["application/pdf"],
+          });
+          if (createError) {
+            logger.warn(`[UPLOAD] Erro ao criar bucket: ${createError.message}`);
+          } else {
+            logger.info(`[UPLOAD] Bucket 'documents' criado com sucesso.`);
+          }
+        }
+      }
+    } catch (bucketErr: any) {
+      logger.warn(`[UPLOAD] Falha crítica ao verificar/criar bucket: ${bucketErr.message || bucketErr}`);
+    }
+
+    // 2. Salvar o arquivo PDF no Supabase Storage, bucket documents
+    let savedPath = "";
+    try {
+      const bucketName = "documents";
+      const { data: storageData, error: storageErr } = await supabase.storage
+        .from(bucketName)
+        .upload(fileName, req.file.buffer, {
+          contentType: "application/pdf",
+          upsert: true,
+        });
+
+      if (storageErr) {
+        throw storageErr;
+      }
+
+      savedPath = storageData?.path ? `documents/${storageData.path}` : `documents/${fileName}`;
+      logger.info(`[UPLOAD] PDF salvo com sucesso no Supabase Storage: ${savedPath}`);
+    } catch (storageErr: any) {
+      logger.error(`[UPLOAD] Erro ao salvar arquivo no Supabase Storage: ${storageErr.message || storageErr}`);
+
+      // Transition existing or pre-registered document status to INDEXAÇÃO_INVÁLIDA
+      if (documentId) {
+        await supabase
+          .from("knowledge_documents")
+          .update({
+            status: "INDEXAÇÃO_INVÁLIDA",
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", documentId);
+      } else {
+        // Create document record with status INDEXAÇÃO_INVÁLIDA
+        await supabase
+          .from("knowledge_documents")
+          .insert({
+            file_name: fileName,
+            status: "INDEXAÇÃO_INVÁLIDA",
+            updated_at: new Date().toISOString()
+          });
+      }
+      throw new Error(`Falha ao salvar no Supabase Storage: ${storageErr.message || storageErr}`);
+    }
+
+    // 3. Gravar esse caminho em knowledge_documents.storage_path e marcar como PROCESSANDO
+    // (Omitindo colunas opcionais file_size e mime_type para máxima robustez de retrocompatibilidade com esquemas de produção)
     if (documentId) {
       await supabase
         .from("knowledge_documents")
         .update({
+          storage_path: savedPath,
           status: "PROCESSANDO",
           total_chunks: 0,
           total_embeddings: 0,
@@ -80,23 +148,46 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
           updated_at: new Date().toISOString()
         })
         .eq("id", documentId);
-      logger.info(`[UPLOAD] Documento ${fileName} (ID: ${documentId}) marcado como PROCESSANDO no início.`);
+      logger.info(`[UPLOAD] Documento ${fileName} (ID: ${documentId}) atualizado com storage_path e marcado como PROCESSANDO.`);
+    } else {
+      const { data: newDoc, error: insertErr } = await supabase
+        .from("knowledge_documents")
+        .insert({
+          file_name: fileName,
+          storage_path: savedPath,
+          status: "PROCESSANDO",
+          total_chunks: 0,
+          total_embeddings: 0,
+          extracted_chars: 0,
+          updated_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+
+      if (insertErr) {
+        throw insertErr;
+      }
+      if (newDoc) {
+        documentId = newDoc.id;
+        logger.info(`[UPLOAD] Novo documento registrado (ID: ${documentId}) com storage_path e marcado como PROCESSANDO.`);
+      }
     }
 
+    // 4. Somente então iniciar o processamento/indexação
     let text = "";
     let chunks: string[] = [];
     const embeddings: number[][] = [];
 
     try {
-      // 1. Parsing robusto de PDF com limpeza e formatação de marcações
+      // Parsing robusto de PDF com limpeza e formatação de marcações
       text = await readPdf(req.file.buffer);
 
-      // 2. Fatiamento inteligente em chunks com conhecimento semântico e tracking de página
+      // Fatiamento inteligente em chunks com conhecimento semântico e tracking de página
       chunks = createChunks(text);
 
       console.log(`[UPLOAD] Gerando ${chunks.length} embeddings para o documento: ${req.file.originalname}`);
 
-      // 3. Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
+      // Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
       for (const chunk of chunks) {
         embeddings.push(await createEmbedding(chunk));
       }
@@ -117,7 +208,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       throw processError;
     }
 
-    // 4. Salvamento unificado com deduplicação de vetores e injeção de metadados
+    // Salvamento unificado com deduplicação de vetores e injeção de metadados
     const savedDocId = await saveKnowledge(
       req.file.originalname,
       chunks,

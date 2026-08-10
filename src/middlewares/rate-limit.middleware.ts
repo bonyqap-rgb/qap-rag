@@ -49,3 +49,13 @@ export const indexRateLimiter = rateLimit({
     `Limite de requisições excedido para indexação de documentos. Por favor, aguarde antes de tentar novamente.`
   ),
 });
+
+export const documentRateLimiter = rateLimit({
+  windowMs: env.RATE_LIMIT_WINDOW_MS,
+  max: env.RATE_LIMIT_MAX_CHAT * 2, // 200 requests per 15 mins by default
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: createRateLimitHandler(
+    `Limite de requisições excedido para consulta de documentos. Por favor, aguarde antes de tentar novamente.`
+  ),
+});

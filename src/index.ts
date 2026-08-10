@@ -37,6 +37,9 @@ if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
 
 const app = express();
 
+// Configure Express trust proxy for Render (production behind a proxy)
+app.set("trust proxy", 1);
+
 // Set HTTP Security headers using helmet
 app.use(helmet());
 
@@ -145,7 +148,7 @@ app.use("/admin", adminRouter);
 // Apply Rate Limiters to specific endpoints
 app.use("/upload", indexRateLimiter, uploadRouter);
 app.use("/chat", chatRateLimiter, chatRouter);
-app.use("/documents", indexRateLimiter, documentsRouter);
+app.use("/documents", documentsRouter);
 app.use("/search", searchRateLimiter, searchRouter);
 app.use("/metrics", metricsRouter);
 
