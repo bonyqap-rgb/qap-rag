@@ -442,7 +442,7 @@ export class DocumentService {
         }
 
         // 5. Gravar novamente, Validar e Marcar como INDEXADO através de saveKnowledge
-        const updatedDocId = await saveKnowledge(filename, chunksList, embeddings);
+        const updatedDocId = await saveKnowledge(filename, chunksList, embeddings, kDocId, storagePath);
 
         const duration = Math.round(performance.now() - startTime);
 
