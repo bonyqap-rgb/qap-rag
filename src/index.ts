@@ -37,6 +37,9 @@ if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
 
 const app = express();
 
+// Configure Express trust proxy for Render (production behind a proxy)
+app.set("trust proxy", 1);
+
 // Set HTTP Security headers using helmet
 app.use(helmet());
 

@@ -58,3 +58,39 @@ test("Rate Limit Handler - formats 429 error correctly", () => {
   assert.strictEqual(responseBody.route, "/chat");
   assert.strictEqual(responseBody.requestId, "test-req-id");
 });
+
+test("Express trust proxy configuration - validates proxy header handling", async () => {
+  // Setup a test Express app mimicking index.ts trust proxy config
+  const testApp = express();
+  testApp.set("trust proxy", 1);
+  testApp.use(express.json());
+
+  testApp.get("/test-proxy", chatRateLimiter, (req, res) => {
+    res.json({
+      ip: req.ip,
+      ips: req.ips,
+      header: req.headers["x-forwarded-for"],
+    });
+  });
+
+  const testServer = testApp.listen(0);
+  const testAddress = testServer.address();
+  const testPort = typeof testAddress === "string" ? 0 : testAddress?.port;
+
+  try {
+    const response = await fetch(`http://localhost:${testPort}/test-proxy`, {
+      headers: {
+        "X-Forwarded-For": "203.0.113.195",
+      },
+    });
+
+    assert.strictEqual(response.status, 200);
+    const data: any = await response.json();
+
+    // With trust proxy set to 1, the leftmost IP in X-Forwarded-For (or the client IP from the first proxy hop)
+    // should be correctly trusted and returned as req.ip.
+    assert.strictEqual(data.ip, "203.0.113.195");
+  } finally {
+    testServer.close();
+  }
+});
