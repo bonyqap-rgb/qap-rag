@@ -207,15 +207,21 @@ export async function saveKnowledge(
         };
       });
 
-      const chunkInsertCall = async () => {
-        const { error } = await supabase
-          .from("knowledge_chunks")
-          .insert(rows);
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+        const batch = rows.slice(i, i + BATCH_SIZE);
+        console.log(`[SAVE KNOWLEDGE] Gravando lote de chunks ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(rows.length / BATCH_SIZE)} (tamanho: ${batch.length})...`);
 
-        if (error) throw error;
-      };
+        const chunkInsertCall = async () => {
+          const { error } = await supabase
+            .from("knowledge_chunks")
+            .insert(batch);
 
-      await retryWithBackoff(chunkInsertCall, 3, 1000);
+          if (error) throw error;
+        };
+
+        await retryWithBackoff(chunkInsertCall, 3, 1000);
+      }
 
       // Verify persistence
       const { count: dbChunksCount, error: countErr } = await supabase
