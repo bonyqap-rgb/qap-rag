@@ -8,7 +8,7 @@ import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
  * @param buffer - The PDF file buffer
  * @returns The fully extracted and normalized document text string with page markers
  */
-export async function readPdf(buffer: Buffer): Promise<string> {
+async function defaultReadPdf(buffer: Buffer): Promise<string> {
   const pdf = await pdfjsLib.getDocument({
     data: new Uint8Array(buffer),
   }).promise;
@@ -37,4 +37,18 @@ export async function readPdf(buffer: Buffer): Promise<string> {
   }
 
   return text.trim();
+}
+
+let readPdfImplementation = defaultReadPdf;
+
+export function setReadPdfImplementation(fn: typeof defaultReadPdf) {
+  readPdfImplementation = fn;
+}
+
+export function resetReadPdfImplementation() {
+  readPdfImplementation = defaultReadPdf;
+}
+
+export async function readPdf(buffer: Buffer): Promise<string> {
+  return readPdfImplementation(buffer);
 }
