@@ -194,18 +194,7 @@ export async function saveKnowledge(
         });
 
         if (rpcErr) {
-          console.warn(`[SAVE KNOWLEDGE] RPC 'update_document_chunks_transaction' falhou ou não existe (${rpcErr.message || JSON.stringify(rpcErr)}). Usando fallback sequencial para compatibilidade com testes/mocks...`);
-          // Fallback sequencial (não atômico na rede, mas compatível com ambientes de teste ou mocks sem a RPC)
-          await supabase
-            .from("knowledge_chunks")
-            .delete()
-            .eq("document_id", documentId);
-
-          const { error: insertErr } = await supabase
-            .from("knowledge_chunks")
-            .insert(rows);
-
-          if (insertErr) throw insertErr;
+          throw new Error(`Erro na transação de atualização de chunks do documento (RPC update_document_chunks_transaction falhou): ${rpcErr.message || JSON.stringify(rpcErr)}`);
         }
       };
 
