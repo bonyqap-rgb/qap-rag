@@ -19,6 +19,17 @@ function createMockSupabase(options: {
             eq: () => Promise.resolve({ count: options.countChunksResult ?? 2, error: null })
           };
         }
+        if (table === "knowledge_chunks") {
+          return {
+            eq: (field: string, val: any) => {
+              const mockChunksList = Array(options.countChunksResult ?? 2).fill(null).map((_, i) => ({
+                id: `mock-chunk-${i}`,
+                embedding: Array(1536).fill(0.1)
+              }));
+              return Promise.resolve({ data: mockChunksList, error: null });
+            }
+          };
+        }
         return {
           eq: (field: string, val: any) => {
             return {

@@ -319,13 +319,14 @@ export class DocumentService {
     let kDocId: string | null = null;
     let filename = "";
     let status = "";
+    let storagePath = "";
 
     // Try to find corresponding knowledge document directly from knowledge_documents table
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
     if (isUuid) {
       const { data: kDoc, error: kDocError } = await supabase
         .from("knowledge_documents")
-        .select("id, file_name, status")
+        .select("id, file_name, status, storage_path")
         .eq("id", id)
         .maybeSingle();
 
@@ -333,6 +334,7 @@ export class DocumentService {
         kDocId = kDoc.id;
         filename = kDoc.file_name || "";
         status = kDoc.status || "";
+        storagePath = kDoc.storage_path || "";
       }
     }
 
@@ -340,7 +342,7 @@ export class DocumentService {
       // Try to find by file_name in knowledge_documents
       const { data: kDoc, error: kDocError } = await supabase
         .from("knowledge_documents")
-        .select("id, file_name, status")
+        .select("id, file_name, status, storage_path")
         .eq("file_name", id)
         .maybeSingle();
 
@@ -348,6 +350,7 @@ export class DocumentService {
         kDocId = kDoc.id;
         filename = kDoc.file_name || "";
         status = kDoc.status || "";
+        storagePath = kDoc.storage_path || "";
       }
     }
 
@@ -366,12 +369,27 @@ export class DocumentService {
       }
     }
 
-    // Se o status do documento for INDEXAÇÃO_INVÁLIDA ou o arquivo físico do PDF existir no disco,
+    // Check if the file exists in Supabase Storage
+    let hasStorageFile = false;
+    if (storagePath || filename) {
+      try {
+        const { data, error } = await supabase.storage
+          .from("documents")
+          .download(storagePath || filename);
+        if (!error && data) {
+          hasStorageFile = true;
+        }
+      } catch {
+        hasStorageFile = false;
+      }
+    }
+
+    // Se o status do documento for PENDENTE, INDEXAÇÃO_INVÁLIDA ou o arquivo físico/storage existir,
     // devemos reprocessar o arquivo original do início para garantir reindexação segura.
-    if (status === "INDEXAÇÃO_INVÁLIDA" || fileExists) {
-      if (!fileExists) {
+    if (status === "PENDENTE" || status === "INDEXAÇÃO_INVÁLIDA" || fileExists || hasStorageFile) {
+      if (!fileExists && !hasStorageFile) {
         throw new ValidationError(
-          `Não é possível reprocessar o documento '${filename}' (status INDEXAÇÃO_INVÁLIDA) porque o arquivo PDF original não foi encontrado em storage/documents/.`
+          `Não é possível reprocessar o documento '${filename}' (status ${status}) porque o arquivo PDF original não foi encontrado localmente nem no Supabase Storage.`
         );
       }
 
@@ -380,8 +398,19 @@ export class DocumentService {
       const timestamp = new Date().toISOString();
 
       try {
-        // 1. Reprocessar o PDF: Ler o buffer do arquivo PDF original do disco
-        const pdfBuffer = await fs.readFile(filePath);
+        // 1. Reprocessar o PDF: Obter o buffer do arquivo PDF
+        let pdfBuffer: Buffer;
+        if (hasStorageFile) {
+          const { data, error } = await supabase.storage
+            .from("documents")
+            .download(storagePath || filename);
+          if (error || !data) {
+            throw new Error(`Falha ao baixar do Supabase Storage: ${error?.message || "sem dados"}`);
+          }
+          pdfBuffer = Buffer.from(await data.arrayBuffer());
+        } else {
+          pdfBuffer = await fs.readFile(filePath);
+        }
 
         // 2. Extrair o texto do PDF
         const text = await readPdf(pdfBuffer);
@@ -389,14 +418,12 @@ export class DocumentService {
         // 3. Fatiar em chunks semânticos
         const chunksList = createChunks(text);
 
-        // 4. Gerar novos embeddings de 1536 dimensões
-        const embeddings: number[][] = [];
-        for (const chunk of chunksList) {
-          embeddings.push(await createEmbedding(chunk));
-        }
+        // 4. Gerar novos embeddings de 1536 dimensões usando nossa nova função concorrente com controle de 429
+        const { generateEmbeddingsWithConcurrency } = await import("../groq/embed.js");
+        const embeddings = await generateEmbeddingsWithConcurrency(chunksList, 3, 200);
 
         // 5. Gravar novamente, Validar e Marcar como INDEXADO através de saveKnowledge
-        const updatedDocId = await saveKnowledge(filename, chunksList, embeddings);
+        const updatedDocId = await saveKnowledge(filename, chunksList, embeddings, storagePath || filename);
 
         const duration = Math.round(performance.now() - startTime);
 
@@ -451,25 +478,26 @@ export class DocumentService {
     const timestamp = new Date().toISOString();
 
     try {
-      const newChunksData = [];
-
-      for (const chunk of chunks) {
+      const cleanChunksTexts = chunks.map(chunk => {
         let cleanText = chunk.content || "";
         const metaMatch = cleanText.match(/^\[METADATA:[\s\S]*?\]\n([\s\S]*)$/);
         if (metaMatch) {
           cleanText = metaMatch[1];
         }
-        cleanText = cleanText.trim();
+        return cleanText.trim();
+      });
 
-        // Regenerate embedding vector
-        const embedding = await createEmbedding(cleanText);
+      // Regenerate embedding vectors using generateEmbeddingsWithConcurrency
+      const { generateEmbeddingsWithConcurrency } = await import("../groq/embed.js");
+      const generatedEmbeddings = await generateEmbeddingsWithConcurrency(cleanChunksTexts, 3, 200);
 
-        newChunksData.push({
+      const newChunksData = chunks.map((chunk, index) => {
+        return {
           chunk_index: chunk.chunk_index,
           content: chunk.content,
-          embedding,
-        });
-      }
+          embedding: generatedEmbeddings[index],
+        };
+      });
 
       // Try RPC transaction update
       const rpcData = newChunksData.map(c => {

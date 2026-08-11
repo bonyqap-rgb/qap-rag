@@ -38,7 +38,8 @@ async function retryWithBackoff<T>(
 export async function saveKnowledge(
   fileName: string,
   rawChunks: string[],
-  embeddings: number[][]
+  embeddings: number[][],
+  storagePath?: string
 ): Promise<string> {
   if (!fileName) throw new Error("O nome do arquivo não foi informado.");
 
@@ -54,30 +55,25 @@ export async function saveKnowledge(
   // 1. Check if the document already exists in the database to support safe, clean reindexing
   const { data: existingDoc, error: existingDocError } = await supabase
     .from("knowledge_documents")
-    .select("id, status")
+    .select("id, status, storage_path")
     .eq("file_name", fileName)
     .maybeSingle();
 
   let documentId: string;
+  const finalStoragePath = storagePath || existingDoc?.storage_path || null;
 
   if (existingDoc) {
     documentId = existingDoc.id;
 
-    // remover chunks antigos e remover embeddings antigos
-    await supabase
-      .from("knowledge_chunks")
-      .delete()
-      .eq("document_id", documentId);
+    // IMPORTANT: Do NOT delete old chunks here. Keep them safe until the new ones are generated and successfully verified!
 
-    // remover metadados antigos e atualizar status para PROCESSANDO
+    // Atualizar status para PROCESSANDO sem apagar os chunks válidos ainda
     const docUpdateCall = async () => {
       const { data: document, error: documentError } = await supabase
         .from("knowledge_documents")
         .update({
           status: "PROCESSANDO",
-          total_chunks: 0,
-          total_embeddings: 0,
-          extracted_chars: 0,
+          storage_path: finalStoragePath,
           updated_at: timestamp
         })
         .eq("id", documentId)
@@ -97,6 +93,7 @@ export async function saveKnowledge(
         .insert({
           file_name: fileName,
           status: "PROCESSANDO",
+          storage_path: finalStoragePath,
           updated_at: timestamp
         })
         .select()
@@ -150,12 +147,6 @@ export async function saveKnowledge(
 
     // If we have valid chunks and embeddings, persist them
     if (chunksCount > 0 && embeddingsCount === chunksCount) {
-      // Clean old chunks
-      await supabase
-        .from("knowledge_chunks")
-        .delete()
-        .eq("document_id", documentId);
-
       const rows = processedChunks.map((pc, index) => {
         const metadataHeader = JSON.stringify({
           sourceDocument: fileName,
@@ -188,6 +179,13 @@ export async function saveKnowledge(
       });
 
       const chunkInsertCall = async () => {
+        // Safe Indexing: Old chunks are deleted only now, in the same atomic attempt as new inserts,
+        // preventing empty state if previous embedding generation failed!
+        await supabase
+          .from("knowledge_chunks")
+          .delete()
+          .eq("document_id", documentId);
+
         const { error } = await supabase
           .from("knowledge_chunks")
           .insert(rows);
@@ -197,14 +195,29 @@ export async function saveKnowledge(
 
       await retryWithBackoff(chunkInsertCall, 3, 1000);
 
-      // Verify persistence
-      const { count: dbChunksCount, error: countErr } = await supabase
+      // Verify persistence and validate embeddings are non-null and exactly 1536 size
+      const { data: dbChunks, error: countErr } = await supabase
         .from("knowledge_chunks")
-        .select("*", { count: "exact", head: true })
+        .select("id, embedding")
         .eq("document_id", documentId);
 
-      if (!countErr && dbChunksCount === chunksCount && dbChunksCount > 0) {
-        persisted = "SIM";
+      if (!countErr && dbChunks && dbChunks.length === chunksCount && dbChunks.length > 0) {
+        const allEmbeddingsValid = dbChunks.every(
+          (c) => c.embedding && Array.isArray(c.embedding) && c.embedding.length === 1536
+        );
+        if (allEmbeddingsValid) {
+          persisted = "SIM";
+        } else {
+          console.error(`[SAVE KNOWLEDGE] Erro de validação: Chunks persistidos possuem embeddings inválidos ou dimensão diferente de 1536.`);
+          persisted = "NÃO";
+        }
+      } else {
+        if (countErr) {
+          console.error(`[SAVE KNOWLEDGE] Erro ao buscar chunks persistidos para validação: ${countErr.message}`);
+        } else {
+          console.error(`[SAVE KNOWLEDGE] Erro de contagem: esperava ${chunksCount} chunks persistidos, mas encontrou ${dbChunks?.length || 0}.`);
+        }
+        persisted = "NÃO";
       }
     }
 
@@ -241,6 +254,7 @@ export async function saveKnowledge(
         total_chunks: chunksCount,
         total_embeddings: embeddingsCount,
         extracted_chars: charsCount,
+        storage_path: finalStoragePath,
         updated_at: timestamp
       })
       .eq("id", documentId);

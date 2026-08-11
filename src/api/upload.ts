@@ -43,15 +43,39 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       fileSize: req.file.size,
     });
 
-    // Salva o PDF fisicamente em storage/documents/ para suporte a reprocessamento seguro
+    // Ensure bucket "documents" exists and upload PDF buffer to Supabase Storage
+    const { supabase } = await import("../config/supabase.js");
+    const bucketName = "documents";
+    try {
+      await supabase.storage.createBucket(bucketName, { public: true });
+    } catch (bucketErr) {
+      // Ignore if bucket already exists
+    }
+
+    logger.info(`[UPLOAD] Fazendo upload do PDF para o Supabase Storage no bucket '${bucketName}'...`);
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from(bucketName)
+      .upload(fileName, req.file.buffer, {
+        contentType: req.file.mimetype || "application/pdf",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      throw new Error(`Falha no upload do arquivo para o Supabase Storage: ${uploadError.message}`);
+    }
+
+    const storagePath = uploadData?.path || fileName;
+    logger.info(`[UPLOAD] PDF enviado com sucesso para o Storage. Caminho: ${storagePath}`);
+
+    // Salva também o PDF fisicamente em storage/documents/ para suporte a reprocessamento local como redundância de segurança
     try {
       const storageDir = path.join(process.cwd(), "storage", "documents");
       await fs.mkdir(storageDir, { recursive: true });
       const filePath = path.join(storageDir, fileName);
       await fs.writeFile(filePath, req.file.buffer);
-      logger.info(`[ADMIN] PDF salvo fisicamente em: ${filePath}`);
+      logger.info(`[ADMIN] PDF salvo fisicamente em local-fallback: ${filePath}`);
     } catch (fsErr: any) {
-      logger.warn(`[ADMIN] Erro ao salvar arquivo PDF físico: ${fsErr.message || fsErr}`);
+      logger.warn(`[ADMIN] Erro ao salvar arquivo PDF físico em local-fallback: ${fsErr.message || fsErr}`);
     }
 
     // 1. Parsing robusto de PDF com limpeza e formatação de marcações
@@ -60,20 +84,18 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
     // 2. Fatiamento inteligente em chunks com conhecimento semântico e tracking de página
     const chunks = createChunks(text);
 
-    const embeddings: number[][] = [];
+    console.log(`[UPLOAD] Gerando ${chunks.length} embeddings de forma concorrente controlada para evitar 429...`);
 
-    console.log(`[UPLOAD] Gerando ${chunks.length} embeddings para o documento: ${req.file.originalname}`);
+    // 3. Geração de embeddings com batching, retentativas e controle estrito de concorrência
+    const { generateEmbeddingsWithConcurrency } = await import("../groq/embed.js");
+    const embeddings = await generateEmbeddingsWithConcurrency(chunks, 3, 200);
 
-    // 3. Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
-    for (const chunk of chunks) {
-      embeddings.push(await createEmbedding(chunk));
-    }
-
-    // 4. Salvamento unificado com deduplicação de vetores e injeção de metadados
+    // 4. Salvamento unificado com deduplicação de vetores, injeção de metadados e o storagePath
     const documentId = await saveKnowledge(
       req.file.originalname,
       chunks,
-      embeddings
+      embeddings,
+      storagePath
     );
 
     const duration = parseFloat((performance.now() - start).toFixed(2));
@@ -124,7 +146,21 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       error_message: error.message || String(error),
     });
 
-    next(error);
+    // Determine accurate status code based on actual error content
+    let statusCode = 500;
+    if (error.status) {
+      statusCode = error.status;
+    } else if (error.message?.includes("429") || error.message?.toLowerCase().includes("rate limit") || error.message?.toLowerCase().includes("limite excedido")) {
+      statusCode = 429;
+    } else if (error.statusCode) {
+      statusCode = error.statusCode;
+    }
+
+    return res.status(statusCode).json({
+      success: false,
+      error: error.message || "Erro interno no servidor ao processar upload.",
+      cause: error.originalError?.message || error.message || String(error)
+    });
   }
 });
 

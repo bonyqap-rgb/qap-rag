@@ -215,3 +215,37 @@ export function resetEmbeddingImplementation() {
 export async function createEmbedding(text: string): Promise<number[]> {
   return embeddingImplementation(text);
 }
+
+/**
+ * Generates embeddings for an array of text chunks with strict concurrency control,
+ * batching, and an optional rate-limiting delay between batches to definitively prevent 429 rate limit errors.
+ *
+ * @param chunks - Array of text strings
+ * @param concurrencyLimit - Number of concurrent requests allowed (default 3)
+ * @param delayBetweenBatchesMs - Pause duration between concurrent batches in milliseconds (default 200)
+ * @returns Array of generated embedding vectors
+ */
+export async function generateEmbeddingsWithConcurrency(
+  chunks: string[],
+  concurrencyLimit = 3,
+  delayBetweenBatchesMs = 200
+): Promise<number[][]> {
+  const results: number[][] = Array(chunks.length);
+
+  for (let i = 0; i < chunks.length; i += concurrencyLimit) {
+    const batch = chunks.slice(i, i + concurrencyLimit);
+    const batchPromises = batch.map(async (chunk, index) => {
+      const idx = i + index;
+      results[idx] = await createEmbedding(chunk);
+    });
+
+    await Promise.all(batchPromises);
+
+    // Rate-limiting delay to gracefully space out API requests
+    if (i + concurrencyLimit < chunks.length && delayBetweenBatchesMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayBetweenBatchesMs));
+    }
+  }
+
+  return results;
+}
