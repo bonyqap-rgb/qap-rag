@@ -39,7 +39,11 @@ export async function saveKnowledge(
   fileName: string,
   rawChunks: string[],
   embeddings: number[][],
-  targetDocumentId?: string
+  targetDocumentId?: string,
+  storagePath?: string,
+  fileSize?: number,
+  mimeType?: string,
+  sha256?: string
 ): Promise<string> {
   if (!fileName) throw new Error("O nome do arquivo não foi informado.");
 
@@ -77,21 +81,13 @@ export async function saveKnowledge(
   if (existingDoc) {
     documentId = existingDoc.id;
 
-    // remover chunks antigos e remover embeddings antigos
-    await supabase
-      .from("knowledge_chunks")
-      .delete()
-      .eq("document_id", documentId);
-
-    // remover metadados antigos e atualizar status para PROCESSANDO
+    // Do NOT delete old chunks here. We preserve them until new ones are processed and ready to be saved.
+    // Update status to PROCESSANDO
     const docUpdateCall = async () => {
       const { data: document, error: documentError } = await supabase
         .from("knowledge_documents")
         .update({
           status: "PROCESSANDO",
-          total_chunks: 0,
-          total_embeddings: 0,
-          extracted_chars: 0,
           updated_at: timestamp
         })
         .eq("id", documentId)
@@ -164,7 +160,7 @@ export async function saveKnowledge(
 
     // If we have valid chunks and embeddings, persist them
     if (chunksCount > 0 && embeddingsCount === chunksCount) {
-      // Clean old chunks
+      // Clean old chunks safely only after we know new chunks are fully processed and ready to be saved
       await supabase
         .from("knowledge_chunks")
         .delete()
@@ -261,15 +257,22 @@ export async function saveKnowledge(
     console.log(`Status final: ${finalStatus}`);
 
     // Update document record with final status and metadata in the database
+    const docUpdatePayload: any = {
+      status: finalStatus,
+      total_chunks: chunksCount,
+      total_embeddings: embeddingsCount,
+      extracted_chars: charsCount,
+      updated_at: timestamp
+    };
+
+    if (storagePath) docUpdatePayload.storage_path = storagePath;
+    if (fileSize) docUpdatePayload.file_size = fileSize;
+    if (mimeType) docUpdatePayload.mime_type = mimeType;
+    if (sha256) docUpdatePayload.sha256 = sha256;
+
     await supabase
       .from("knowledge_documents")
-      .update({
-        status: finalStatus,
-        total_chunks: chunksCount,
-        total_embeddings: embeddingsCount,
-        extracted_chars: charsCount,
-        updated_at: timestamp
-      })
+      .update(docUpdatePayload)
       .eq("id", documentId);
 
     const duration = Math.round(performance.now() - startTime);

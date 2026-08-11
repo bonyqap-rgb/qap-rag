@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
 import fs from "fs/promises";
 import path from "path";
+import crypto from "crypto";
 import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
 import { createEmbeddingsForChunks } from "../groq/embed.js";
@@ -44,6 +45,9 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       filename: fileName,
       fileSize: req.file.size,
     });
+
+    // Calculate checksum of the uploaded file
+    const sha256 = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
 
     // Resolve pre-registered document ID if provided by the client/frontend
     const documentIdFromReq = req.body.documentId || req.body.id || req.query.documentId || req.headers["x-document-id"];
@@ -93,15 +97,39 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       documentId = data.id;
     }
 
-    // Salva o PDF fisicamente em storage/documents/ para suporte a reprocessamento seguro
+    // Upload PDF file to Supabase Storage private bucket 'documents' for persistent storage
+    const storagePath = `documents/${fileName}`;
+    try {
+      // Create private bucket if missing
+      await supabase.storage.createBucket("documents", {
+        public: false,
+      }).catch(() => { /* bucket already exists or cannot create */ });
+
+      const { error: uploadError } = await supabase.storage
+        .from("documents")
+        .upload(fileName, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: true,
+        });
+
+      if (uploadError) {
+        throw new Error(`Falha no upload para o Supabase Storage: ${uploadError.message}`);
+      }
+      logger.info(`[ADMIN] PDF salvo com sucesso no Supabase Storage: ${storagePath}`);
+    } catch (storageErr: any) {
+      logger.error(`[ADMIN] Erro crítico no Supabase Storage para ${fileName}:`, storageErr);
+      throw storageErr; // Bubble up exact storage failure
+    }
+
+    // Also write physically to disk cache for fast fallback
     try {
       const storageDir = path.join(process.cwd(), "storage", "documents");
       await fs.mkdir(storageDir, { recursive: true });
       const filePath = path.join(storageDir, fileName);
       await fs.writeFile(filePath, req.file.buffer);
-      logger.info(`[ADMIN] PDF salvo fisicamente em: ${filePath}`);
+      logger.info(`[ADMIN] PDF salvo localmente em cache: ${filePath}`);
     } catch (fsErr: any) {
-      logger.warn(`[ADMIN] Erro ao salvar arquivo PDF físico: ${fsErr.message || fsErr}`);
+      logger.warn(`[ADMIN] Erro ao salvar arquivo PDF físico localmente: ${fsErr.message || fsErr}`);
     }
 
     // 1. Parsing robusto de PDF com limpeza e formatação de marcações
@@ -115,12 +143,16 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
     // 3. Geração de embeddings estrutural em lote com controle de taxa e retentativas
     const embeddings = await createEmbeddingsForChunks(chunks);
 
-    // 4. Salvamento unificado com deduplicação de vetores e injeção de metadados (passing direct target documentId)
+    // 4. Salvamento unificado com deduplicação de vetores e injeção de metadados (passing direct target documentId and storage metadata)
     const savedDocumentId = await saveKnowledge(
       req.file.originalname,
       chunks,
       embeddings,
-      documentId
+      documentId,
+      storagePath,
+      req.file.size,
+      req.file.mimetype,
+      sha256
     );
 
     const duration = parseFloat((performance.now() - start).toFixed(2));
