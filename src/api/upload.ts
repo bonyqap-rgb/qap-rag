@@ -4,7 +4,7 @@ import fs from "fs/promises";
 import path from "path";
 import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
-import { createEmbedding } from "../groq/embed.js";
+import { createEmbeddingsForChunks } from "../groq/embed.js";
 import { saveKnowledge } from "../services/saveKnowledge.js";
 import { logger } from "../services/logger.service.js";
 import { indexingHistoryService } from "../services/indexing-history.service.js";
@@ -110,14 +110,10 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
     // 2. Fatiamento inteligente em chunks com conhecimento semântico e tracking de página
     const chunks = createChunks(text);
 
-    const embeddings: number[][] = [];
+    console.log(`[UPLOAD] Gerando embeddings em lote para ${chunks.length} chunks para o documento: ${req.file.originalname}`);
 
-    console.log(`[UPLOAD] Gerando ${chunks.length} embeddings para o documento: ${req.file.originalname}`);
-
-    // 3. Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
-    for (const chunk of chunks) {
-      embeddings.push(await createEmbedding(chunk));
-    }
+    // 3. Geração de embeddings estrutural em lote com controle de taxa e retentativas
+    const embeddings = await createEmbeddingsForChunks(chunks);
 
     // 4. Salvamento unificado com deduplicação de vetores e injeção de metadados (passing direct target documentId)
     const savedDocumentId = await saveKnowledge(

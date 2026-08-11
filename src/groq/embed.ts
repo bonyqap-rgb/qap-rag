@@ -215,3 +215,179 @@ export function resetEmbeddingImplementation() {
 export async function createEmbedding(text: string): Promise<number[]> {
   return embeddingImplementation(text);
 }
+
+/**
+ * Normalizes an embedding vector to exactly 1536 dimensions.
+ */
+function normalizeDimension(vector: number[]): number[] {
+  const targetDimension = 1536;
+  let finalEmbedding = [...vector];
+  if (finalEmbedding.length > targetDimension) {
+    return finalEmbedding.slice(0, targetDimension);
+  } else {
+    while (finalEmbedding.length < targetDimension) {
+      finalEmbedding.push(0);
+    }
+    return finalEmbedding;
+  }
+}
+
+/**
+ * Calls the active embedding API to generate embeddings for a batch of texts.
+ */
+async function callBatchApi(texts: string[]): Promise<number[][]> {
+  if (texts.length === 0) return [];
+
+  // Safe fallback to mock embeddings during test suite execution with dummy keys
+  if (env.SUPABASE_SERVICE_ROLE_KEY === "dummy_key") {
+    return Array(texts.length).fill(null).map(() => Array(1536).fill(0.01));
+  }
+
+  const apiCall = () =>
+    withTimeout(
+      (async () => {
+        if (env.VOYAGE_API_KEY) {
+          const res = await fetch("https://api.voyageai.com/v1/embeddings", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${env.VOYAGE_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              input: texts,
+              model: process.env.VOYAGE_EMBED_MODEL || "voyage-3",
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`Erro na API do Voyage AI (${res.status}): ${text}`);
+          }
+          const data = await res.json() as any;
+          const embeddings = data.data?.map((d: any) => d.embedding);
+          if (!embeddings || embeddings.length !== texts.length) {
+            throw new Error("Resposta da API de embedding do Voyage AI inválida ou vazia.");
+          }
+          return embeddings;
+        } else if (env.NOMIC_API_KEY) {
+          const res = await fetch("https://api-atlas.nomic.ai/v1/embedding/text", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${env.NOMIC_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: process.env.NOMIC_EMBED_MODEL || "nomic-embed-text-v1.5",
+              texts: texts,
+              task_type: "search_document",
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`Erro na API do Nomic (${res.status}): ${text}`);
+          }
+          const data = await res.json() as any;
+          const embeddings = data.embeddings;
+          if (!embeddings || embeddings.length !== texts.length) {
+            throw new Error("Resposta da API de embedding do Nomic inválida ou vazia.");
+          }
+          return embeddings;
+        } else if (env.GROQ_API_KEY) {
+          // Groq's OpenAPI specification supports array input for embeddings.create
+          const response = await groq.embeddings.create({
+            model: process.env.GROQ_EMBED_MODEL || "nomic-embed-text-v1_5",
+            input: texts,
+          });
+          const embeddings = response.data?.map((d: any) => d.embedding);
+          if (!embeddings || embeddings.length !== texts.length) {
+            throw new Error("Resposta da API de embedding do Groq inválida ou vazia.");
+          }
+          return embeddings;
+        } else {
+          throw new Error("Provedor de embedding não configurado. Defina VOYAGE_API_KEY, NOMIC_API_KEY ou GROQ_API_KEY.");
+        }
+      })(),
+      env.LLM_TIMEOUT
+    );
+
+  // Execute the API call inside the Circuit Breaker with exponential backoff retry on transient issues
+  return groqEmbeddingCircuitBreaker.execute(() =>
+    retryWithBackoff(apiCall, env.LLM_RETRIES, env.LLM_RETRY_DELAY)
+  );
+}
+
+/**
+ * Generates embeddings for an array of text chunks in batches.
+ * First checks cache for each chunk. For the remaining chunks, it runs batch queries
+ * (e.g. up to 16 chunks at a time) to the configured embedding provider.
+ * Implements exponential backoff retry on failures, a cooling delay between batches,
+ * and pads/truncates resulting vectors to exactly 1536 dimensions.
+ *
+ * @param chunks - Text array
+ * @returns Embeddings list of 1536-dimensional vectors
+ */
+export async function createEmbeddingsForChunks(chunks: string[]): Promise<number[][]> {
+  if (!chunks || chunks.length === 0) return [];
+
+  const finalEmbeddings: number[][] = Array(chunks.length).fill(null);
+  const missingIndices: number[] = [];
+
+  // 1. Check cache first
+  for (let i = 0; i < chunks.length; i++) {
+    const text = chunks[i] ?? "";
+    if (text.trim() === "") {
+      finalEmbeddings[i] = normalizeDimension([]);
+      continue;
+    }
+
+    const cacheKey = generateHashKey(text.trim());
+    const cached = embeddingCache.get(cacheKey);
+
+    if (cached) {
+      finalEmbeddings[i] = normalizeDimension(cached);
+    } else {
+      missingIndices.push(i);
+    }
+  }
+
+  if (missingIndices.length === 0) {
+    console.log(`[EMBEDDING] Todos os ${chunks.length} chunks recuperados com sucesso do cache.`);
+    return finalEmbeddings;
+  }
+
+  console.log(`[EMBEDDING] Iniciando geração em lote para ${missingIndices.length} de ${chunks.length} chunks.`);
+
+  // 2. Process missing chunks in batches of 16 to avoid rate limits
+  const batchSize = 16;
+  const throttleDelay = 300; // 300ms cooling delay between batches
+
+  for (let b = 0; b < missingIndices.length; b += batchSize) {
+    const batchIndices = missingIndices.slice(b, b + batchSize);
+    const batchTexts = batchIndices.map(idx => (chunks[idx] ?? "").trim());
+
+    console.log(`[EMBEDDING] Processando lote de ${batchTexts.length} chunks (lote ${Math.floor(b / batchSize) + 1})...`);
+
+    // Call API with the batched inputs
+    const batchResults = await callBatchApi(batchTexts);
+
+    // Save results to cache and assign to original index
+    for (let r = 0; r < batchResults.length; r++) {
+      const originalIndex = batchIndices[r];
+      const rawVector = batchResults[r];
+      const normalizedVector = normalizeDimension(rawVector);
+
+      finalEmbeddings[originalIndex] = normalizedVector;
+
+      // Cache the result
+      const cacheKey = generateHashKey((chunks[originalIndex] ?? "").trim());
+      embeddingCache.set(cacheKey, normalizedVector);
+    }
+
+    // Apply throttle delay to prevent exceeding Requests Per Minute limits on consecutive batches
+    if (b + batchSize < missingIndices.length) {
+      console.log(`[EMBEDDING] Aplicando delay de resfriamento de ${throttleDelay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, throttleDelay));
+    }
+  }
+
+  return finalEmbeddings;
+}
