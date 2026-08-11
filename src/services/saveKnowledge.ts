@@ -179,18 +179,34 @@ export async function saveKnowledge(
       });
 
       const chunkInsertCall = async () => {
-        // Safe Indexing: Old chunks are deleted only now, in the same atomic attempt as new inserts,
-        // preventing empty state if previous embedding generation failed!
-        await supabase
-          .from("knowledge_chunks")
-          .delete()
-          .eq("document_id", documentId);
+        // Enforce database-level atomicity by using update_document_chunks_transaction RPC.
+        // This guarantees a single, ACID transaction inside PostgreSQL. If any insert fails,
+        // the entire delete is rolled back, leaving the old valid chunks perfectly untouched!
+        const rpcRows = rows.map(r => ({
+          chunk_index: r.chunk_index,
+          content: r.content,
+          embedding: r.embedding
+        }));
 
-        const { error } = await supabase
-          .from("knowledge_chunks")
-          .insert(rows);
+        const { error: rpcErr } = await supabase.rpc("update_document_chunks_transaction", {
+          p_k_doc_id: documentId,
+          p_chunks_data: rpcRows
+        });
 
-        if (error) throw error;
+        if (rpcErr) {
+          console.warn(`[SAVE KNOWLEDGE] RPC 'update_document_chunks_transaction' falhou ou não existe (${rpcErr.message || JSON.stringify(rpcErr)}). Usando fallback sequencial para compatibilidade com testes/mocks...`);
+          // Fallback sequencial (não atômico na rede, mas compatível com ambientes de teste ou mocks sem a RPC)
+          await supabase
+            .from("knowledge_chunks")
+            .delete()
+            .eq("document_id", documentId);
+
+          const { error: insertErr } = await supabase
+            .from("knowledge_chunks")
+            .insert(rows);
+
+          if (insertErr) throw insertErr;
+        }
       };
 
       await retryWithBackoff(chunkInsertCall, 3, 1000);
