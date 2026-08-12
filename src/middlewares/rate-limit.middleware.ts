@@ -1,6 +1,11 @@
 import { rateLimit } from "express-rate-limit";
 import { env } from "../config/env.js";
 
+// QAP IA Rate Limiting Configuration
+// Note: This relies on Express trust proxy being configured correctly via app.set("trust proxy", 1) in src/index.ts
+// so that the client's real IP address from Render's reverse proxy (load balancer) is used for rate limiting.
+// All express-rate-limit validations are fully enabled for security, preventing ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+
 /**
  * Standardized error message formatter for rate limiting.
  */
