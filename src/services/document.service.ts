@@ -531,28 +531,7 @@ export class DocumentService {
       });
 
       if (rpcErr) {
-        logger.warn(`RPC update_document_chunks_transaction falhou: ${rpcErr.message}. Executando reindexação sequencial fallback...`);
-
-        // Fallback: Delete old and insert new sequentially
-        const { error: delErr } = await supabase
-          .from("knowledge_chunks")
-          .delete()
-          .eq("document_id", kDocId);
-
-        if (delErr) throw delErr;
-
-        const rowsToInsert = newChunksData.map(c => ({
-          document_id: kDocId,
-          chunk_index: c.chunk_index,
-          content: c.content,
-          embedding: c.embedding
-        }));
-
-        const { error: insErr } = await supabase
-          .from("knowledge_chunks")
-          .insert(rowsToInsert);
-
-        if (insErr) throw insErr;
+        throw new Error(`Erro na reindexação transacional de chunks do documento (RPC update_document_chunks_transaction falhou): ${rpcErr.message || JSON.stringify(rpcErr)}`);
       }
 
       await supabase
