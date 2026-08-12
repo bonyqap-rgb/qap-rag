@@ -19,6 +19,8 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
   const start = performance.now();
   const requestId = req.headers["x-request-id"] as string;
   let fileName = "unknown";
+  let documentId: string | null = null;
+  let storagePath: string | null = null;
 
   try {
     if (!req.file) {
@@ -43,13 +45,50 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       fileSize: req.file.size,
     });
 
-    // Ensure bucket "documents" exists and upload PDF buffer to Supabase Storage
+    // Ensure bucket "documents" exists
     const { supabase } = await import("../config/supabase.js");
     const bucketName = "documents";
     try {
       await supabase.storage.createBucket(bucketName, { public: true });
     } catch (bucketErr) {
       // Ignore if bucket already exists
+    }
+
+    // A. PRÉ-REGISTRO / PERSISTÊNCIA INICIAL DO DOCUMENTO
+    // Mantém o ID do documento durante todo o fluxo do upload para evitar arquivos órfãos em caso de falha.
+    const timestamp = new Date().toISOString();
+    const { data: existingDoc } = await supabase
+      .from("knowledge_documents")
+      .select("id, storage_path")
+      .eq("file_name", fileName)
+      .maybeSingle();
+
+    if (existingDoc) {
+      documentId = existingDoc.id;
+      // Atualiza o status do documento para PROCESSANDO no início
+      await supabase
+        .from("knowledge_documents")
+        .update({
+          status: "PROCESSANDO",
+          updated_at: timestamp
+        })
+        .eq("id", documentId);
+    } else {
+      // Cria o registro em PROCESSANDO no início
+      const { data: newDoc, error: insertError } = await supabase
+        .from("knowledge_documents")
+        .insert({
+          file_name: fileName,
+          status: "PROCESSANDO",
+          updated_at: timestamp
+        })
+        .select("id")
+        .single();
+
+      if (insertError) {
+        throw insertError;
+      }
+      documentId = newDoc.id;
     }
 
     logger.info(`[UPLOAD] Fazendo upload do PDF para o Supabase Storage no bucket '${bucketName}'...`);
@@ -64,7 +103,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       throw new Error(`Falha no upload do arquivo para o Supabase Storage: ${uploadError.message}`);
     }
 
-    const storagePath = uploadData?.path || fileName;
+    storagePath = uploadData?.path || fileName;
     logger.info(`[UPLOAD] PDF enviado com sucesso para o Storage. Caminho: ${storagePath}`);
 
     // Salva também o PDF fisicamente em storage/documents/ para suporte a reprocessamento local como redundância de segurança
@@ -91,7 +130,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
     const embeddings = await generateEmbeddingsWithConcurrency(chunks, 3, 200);
 
     // 4. Salvamento unificado com deduplicação de vetores, injeção de metadados e o storagePath
-    const documentId = await saveKnowledge(
+    const documentIdSaved = await saveKnowledge(
       req.file.originalname,
       chunks,
       embeddings,
@@ -120,7 +159,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
 
     return res.json({
       success: true,
-      documentId,
+      documentId: documentIdSaved,
       fileName: req.file.originalname,
       characters: text.length,
       chunks: chunks.length,
@@ -134,6 +173,26 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       status: "error",
       filename: fileName,
     });
+
+    // Diagnóstico de erros e persistência de status seguro:
+    // Garante que o status do registro seja atualizado para INDEXAÇÃO_INVÁLIDA em caso de falha em qualquer etapa posterior ao pré-registro,
+    // sem perder a referência do storage_path nem o erro original.
+    const { supabase } = await import("../config/supabase.js");
+    if (documentId) {
+      try {
+        await supabase
+          .from("knowledge_documents")
+          .update({
+            status: "INDEXAÇÃO_INVÁLIDA",
+            storage_path: storagePath || null,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", documentId);
+        logger.info(`[UPLOAD] Status do documento ID ${documentId} atualizado para INDEXAÇÃO_INVÁLIDA devido a falha: ${error.message || error}`);
+      } catch (dbErr: any) {
+        logger.error(`[UPLOAD] Falha ao atualizar status para INDEXAÇÃO_INVÁLIDA do documento ID ${documentId}: ${dbErr.message}`);
+      }
+    }
 
     // Record failed indexing history
     await indexingHistoryService.record({
