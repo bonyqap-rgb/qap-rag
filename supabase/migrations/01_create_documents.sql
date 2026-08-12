@@ -1,3 +1,6 @@
+-- Enable vector extension
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- Create documents table with proper constraints and defaults
 CREATE TABLE IF NOT EXISTS public.documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -25,6 +28,28 @@ CREATE INDEX IF NOT EXISTS idx_documents_category ON public.documents(category);
 
 -- Comment to document
 COMMENT ON TABLE public.documents IS 'Table storing core metadata for documents in the QAP Document Management module.';
+
+-- Create knowledge_documents table for RAG pipeline
+CREATE TABLE IF NOT EXISTS public.knowledge_documents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    file_name VARCHAR(255) NOT NULL UNIQUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Create knowledge_chunks table with vector support
+CREATE TABLE IF NOT EXISTS public.knowledge_chunks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id UUID NOT NULL REFERENCES public.knowledge_documents(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    embedding VECTOR(768) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Index for chunk retrieval
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_document_id ON public.knowledge_chunks(document_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_embedding ON public.knowledge_chunks USING hnsw (embedding vector_cosine_ops);
 
 -- Enable RLS on storage.objects if not already enabled
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
