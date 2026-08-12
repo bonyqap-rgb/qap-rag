@@ -84,12 +84,6 @@ export async function saveKnowledge(
   if (existingDoc) {
     finalDocumentId = existingDoc.id;
 
-    // remover chunks antigos e remover embeddings antigos
-    await supabase
-      .from("knowledge_chunks")
-      .delete()
-      .eq("document_id", finalDocumentId);
-
     // remover metadados antigos e atualizar status para PROCESSANDO
     const docUpdateCall = async () => {
       const updatePayload: any = {
@@ -181,15 +175,9 @@ export async function saveKnowledge(
     embeddingsCount = processedChunks.filter(pc => pc.embedding && pc.embedding.length > 0).length;
     charsCount = processedChunks.reduce((sum, pc) => sum + (pc.text?.length || 0), 0);
 
-    // If we have valid chunks and embeddings, persist them
+    // If we have valid chunks and embeddings, persist them atomically
     if (chunksCount > 0 && embeddingsCount === chunksCount) {
-      // Clean old chunks
-      await supabase
-        .from("knowledge_chunks")
-        .delete()
-        .eq("document_id", finalDocumentId);
-
-      const rows = processedChunks.map((pc, index) => {
+      const rpcChunksPayload = processedChunks.map((pc, index) => {
         const metadataHeader = JSON.stringify({
           sourceDocument: fileName,
           pageNumber: pc.page,
@@ -213,28 +201,24 @@ export async function saveKnowledge(
         }
 
         return {
-          document_id: finalDocumentId,
           chunk_index: index,
           content: enrichedContent,
           embedding: finalChunkEmbedding,
         };
       });
 
-      const BATCH_SIZE = 50;
-      for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-        const batch = rows.slice(i, i + BATCH_SIZE);
-        console.log(`[SAVE KNOWLEDGE] Gravando lote de chunks ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(rows.length / BATCH_SIZE)} (tamanho: ${batch.length})...`);
+      console.log(`[SAVE KNOWLEDGE] Executando gravação atômica via RPC update_document_chunks_transaction para ${chunksCount} chunks...`);
 
-        const chunkInsertCall = async () => {
-          const { error } = await supabase
-            .from("knowledge_chunks")
-            .insert(batch);
+      const rpcCall = async () => {
+        const { error } = await supabase.rpc("update_document_chunks_transaction", {
+          p_document_id: finalDocumentId,
+          p_chunks: rpcChunksPayload
+        });
 
-          if (error) throw error;
-        };
+        if (error) throw error;
+      };
 
-        await retryWithBackoff(chunkInsertCall, 3, 1000);
-      }
+      await retryWithBackoff(rpcCall, 3, 1000);
 
       // Verify persistence
       const { count: dbChunksCount, error: countErr } = await supabase

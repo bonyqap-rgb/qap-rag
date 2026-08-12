@@ -34,6 +34,7 @@ let insertedChunksCount = 0;
 // Save original methods
 const originalFrom = supabase.from;
 const originalStorage = supabase.storage;
+const originalRpc = supabase.rpc;
 
 beforeEach(() => {
   storageUploadCalled = false;
@@ -41,6 +42,15 @@ beforeEach(() => {
   dbUpdatedDocs = [];
   storageUploadFailMode = false;
   insertedChunksCount = 0;
+
+  // Mock Supabase RPC
+  supabase.rpc = function (fnName: string, args: any) {
+    if (fnName === "update_document_chunks_transaction") {
+      insertedChunksCount = args.p_chunks?.length || 0;
+      return Promise.resolve({ data: null, error: null }) as any;
+    }
+    return originalRpc.call(supabase, fnName as any, args);
+  } as any;
 
   // Mock Supabase Storage
   supabase.storage = {
@@ -156,6 +166,7 @@ afterEach(() => {
   resetEmbeddingImplementation();
   supabase.from = originalFrom;
   supabase.storage = originalStorage;
+  supabase.rpc = originalRpc;
 });
 
 after(() => {

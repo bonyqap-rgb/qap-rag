@@ -539,33 +539,12 @@ export class DocumentService {
       }
 
       const { error: rpcErr } = await supabase.rpc("update_document_chunks_transaction", {
-        p_k_doc_id: kDocId,
-        p_chunks_data: rpcData
+        p_document_id: kDocId,
+        p_chunks: rpcData
       });
 
       if (rpcErr) {
-        logger.warn(`RPC update_document_chunks_transaction falhou: ${rpcErr.message}. Executando reindexação sequencial fallback...`);
-
-        // Fallback: Delete old and insert new sequentially
-        const { error: delErr } = await supabase
-          .from("knowledge_chunks")
-          .delete()
-          .eq("document_id", kDocId);
-
-        if (delErr) throw delErr;
-
-        const rowsToInsert = newChunksData.map(c => ({
-          document_id: kDocId,
-          chunk_index: c.chunk_index,
-          content: c.content,
-          embedding: c.embedding
-        }));
-
-        const { error: insErr } = await supabase
-          .from("knowledge_chunks")
-          .insert(rowsToInsert);
-
-        if (insErr) throw insErr;
+        throw rpcErr;
       }
 
       await supabase
