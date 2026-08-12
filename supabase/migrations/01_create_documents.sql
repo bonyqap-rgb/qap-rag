@@ -25,3 +25,26 @@ CREATE INDEX IF NOT EXISTS idx_documents_category ON public.documents(category);
 
 -- Comment to document
 COMMENT ON TABLE public.documents IS 'Table storing core metadata for documents in the QAP Document Management module.';
+
+-- Enable RLS on storage.objects if not already enabled
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+
+-- Drop policies if they already exist to avoid "already exists" migration errors
+DROP POLICY IF EXISTS "Public Access" ON storage.objects;
+DROP POLICY IF EXISTS "Public Upload" ON storage.objects;
+DROP POLICY IF EXISTS "Public Delete" ON storage.objects;
+
+-- Create storage bucket for 'documents' if it does not exist
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('documents', 'documents', true)
+ON CONFLICT (id) DO NOTHING;
+
+-- Re-create the storage policies for 'documents' bucket
+CREATE POLICY "Public Access" ON storage.objects
+    FOR SELECT TO public USING (bucket_id = 'documents');
+
+CREATE POLICY "Public Upload" ON storage.objects
+    FOR INSERT TO public WITH CHECK (bucket_id = 'documents');
+
+CREATE POLICY "Public Delete" ON storage.objects
+    FOR DELETE TO public USING (bucket_id = 'documents');
