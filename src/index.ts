@@ -36,6 +36,9 @@ if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
 
 const app = express();
 
+// Trust reverse proxy (needed for accurate IP rate limiting on Render/deployments)
+app.set("trust proxy", 1);
+
 // Set HTTP Security headers using helmet
 app.use(helmet());
 
