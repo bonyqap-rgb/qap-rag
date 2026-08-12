@@ -48,8 +48,32 @@ async function retryWithBackoff<T>(
       if (attempt >= retries) {
         throw error;
       }
-      const backoffDelay = delayMs * Math.pow(2, attempt - 1);
-      console.warn(`[RETRY] Tentativa de Embedding ${attempt} falhou. Retentando em ${backoffDelay}ms... Erro: ${error.message || error}`);
+
+      let backoffDelay = delayMs * Math.pow(2, attempt - 1);
+
+      // Detect HTTP 429 and check for Retry-After header
+      const status = error.status || error.statusCode || (error.response && error.response.status);
+      if (status === 429) {
+        let retryAfterVal: string | null = null;
+        if (error.headers) {
+          retryAfterVal = error.headers.get?.("retry-after") || error.headers["retry-after"] || null;
+        } else if (error.response?.headers) {
+          retryAfterVal = error.response.headers.get?.("retry-after") || error.response.headers["retry-after"] || null;
+        }
+
+        if (retryAfterVal) {
+          const seconds = parseInt(retryAfterVal, 10);
+          if (!isNaN(seconds) && seconds > 0) {
+            backoffDelay = seconds * 1000;
+            console.warn(`[RETRY 429] Rate limit atingido. Cabeçalho Retry-After detectado: ${seconds}s. Aguardando ${backoffDelay}ms...`);
+          }
+        } else {
+          console.warn(`[RETRY 429] Rate limit atingido sem cabeçalho Retry-After. Aplicando backoff de ${backoffDelay}ms...`);
+        }
+      } else {
+        console.warn(`[RETRY] Tentativa de Embedding ${attempt} falhou. Retentando em ${backoffDelay}ms... Erro: ${error.message || error}`);
+      }
+
       await new Promise((resolve) => setTimeout(resolve, backoffDelay));
     }
   }
@@ -105,7 +129,10 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
           });
           if (!res.ok) {
             const text = await res.text();
-            throw new Error(`Erro na API do Voyage AI (${res.status}): ${text}`);
+            const err: any = new Error(`Erro na API do Voyage AI (${res.status}): ${text}`);
+            err.status = res.status;
+            err.headers = res.headers;
+            throw err;
           }
           const data = await res.json() as any;
           const embedding = data.data?.[0]?.embedding;
@@ -129,7 +156,10 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
           });
           if (!res.ok) {
             const text = await res.text();
-            throw new Error(`Erro na API do Nomic (${res.status}): ${text}`);
+            const err: any = new Error(`Erro na API do Nomic (${res.status}): ${text}`);
+            err.status = res.status;
+            err.headers = res.headers;
+            throw err;
           }
           const data = await res.json() as any;
           const embedding = data.embeddings?.[0];
@@ -140,16 +170,24 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
           return embedding;
         } else if (env.GROQ_API_KEY) {
           // Generate embeddings using Groq SDK nomic-embed-text-v1_5 model as fallback/primary
-          const response = await groq.embeddings.create({
-            model: process.env.GROQ_EMBED_MODEL || "nomic-embed-text-v1_5",
-            input: normalizedText,
-          });
-          const embedding = response.data?.[0]?.embedding;
-          if (!embedding) {
-            throw new Error("Resposta da API de embedding do Groq inválida ou vazia.");
+          try {
+            const response = await groq.embeddings.create({
+              model: process.env.GROQ_EMBED_MODEL || "nomic-embed-text-v1_5",
+              input: normalizedText,
+            });
+            const embedding = response.data?.[0]?.embedding;
+            if (!embedding) {
+              throw new Error("Resposta da API de embedding do Groq inválida ou vazia.");
+            }
+            console.log(`[GROQ] dimensão original recebida da API: ${embedding.length}`);
+            return embedding;
+          } catch (groqErr: any) {
+            // Propagate HTTP status & response headers if available from Groq SDK error
+            const err: any = new Error(groqErr.message || String(groqErr));
+            err.status = groqErr.status || groqErr.statusCode || (groqErr.response && groqErr.response.status);
+            err.headers = groqErr.headers || (groqErr.response && groqErr.response.headers);
+            throw err;
           }
-          console.log(`[GROQ] dimensão original recebida da API: ${embedding.length}`);
-          return embedding;
         } else {
           throw new Error("Provedor de embedding não configurado. Defina VOYAGE_API_KEY, NOMIC_API_KEY ou GROQ_API_KEY no arquivo .env.");
         }
@@ -217,32 +255,38 @@ export async function createEmbedding(text: string): Promise<number[]> {
 }
 
 /**
- * Generates embeddings for a list of text chunks in batches, maintaining a throttle delay
- * between API calls to prevent HTTP 429 Rate Limit issues.
+ * Generates embeddings for a list of text chunks with a controlled low concurrency (maximum 2 parallel requests)
+ * and active delay spacing to completely eliminate rate limit bursts.
  *
  * @param chunks - Array of text chunks
  * @returns Array of 1536-dimensional embedding vectors
  */
 export async function createEmbeddingsForChunks(chunks: string[]): Promise<number[][]> {
-  const embeddings: number[][] = [];
-  const batchSize = 16;
-  const delayMs = 300;
+  const results: number[][] = new Array(chunks.length);
+  const concurrency = 2;
+  const delayMs = 150; // Active delay spacing to prevent sudden bursts
 
-  for (let i = 0; i < chunks.length; i += batchSize) {
-    const batch = chunks.slice(i, i + batchSize);
-    console.log(`[EMBEDDING BATCH] Processando lote de chunks ${Math.floor(i / batchSize) + 1}/${Math.ceil(chunks.length / batchSize)} (tamanho: ${batch.length})...`);
+  let index = 0;
 
-    const batchPromises = batch.map(async (chunk) => {
-      return await createEmbedding(chunk);
-    });
+  async function worker() {
+    while (true) {
+      const currentIndex = index++;
+      if (currentIndex >= chunks.length) {
+        break;
+      }
 
-    const batchResults = await Promise.all(batchPromises);
-    embeddings.push(...batchResults);
+      results[currentIndex] = await createEmbedding(chunks[currentIndex]);
 
-    if (i + batchSize < chunks.length) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      // Spaced delay between worker calls to prevent sudden spikes
+      if (index < chunks.length) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
     }
   }
 
-  return embeddings;
+  // Spawn parallel workers up to the concurrency limit
+  const workers = Array.from({ length: Math.min(concurrency, chunks.length) }, worker);
+  await Promise.all(workers);
+
+  return results;
 }

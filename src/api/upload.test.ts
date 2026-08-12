@@ -14,6 +14,7 @@ import { setEmbeddingImplementation, resetEmbeddingImplementation } from "../gro
 
 // Initialize express app for testing upload
 const app = express();
+app.set("trust proxy", 1);
 app.use(express.json());
 app.use("/upload", uploadRouter);
 app.use(errorHandler);

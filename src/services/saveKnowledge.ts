@@ -242,9 +242,15 @@ export async function saveKnowledge(
         .select("*", { count: "exact", head: true })
         .eq("document_id", finalDocumentId);
 
-      if (!countErr && dbChunksCount === chunksCount && dbChunksCount > 0) {
-        persisted = "SIM";
+      if (countErr) {
+        throw new Error(`Erro ao verificar os chunks gravados no banco de dados: ${countErr.message}`);
       }
+
+      if (dbChunksCount !== chunksCount || dbChunksCount === 0) {
+        throw new Error(`Inconsistência de chunks detectada: Chunks enviados para inserção: ${chunksCount}, Chunks encontrados no banco de dados: ${dbChunksCount}`);
+      }
+
+      persisted = "SIM";
     }
 
     // Strict validation of indexing
@@ -258,15 +264,16 @@ export async function saveKnowledge(
     console.error(`[SAVE KNOWLEDGE ERROR] ${err.message || err}`);
     finalStatus = "INDEXAÇÃO_INVÁLIDA";
     persisted = "NÃO";
+    throw err;
   } finally {
     // Print the exact requested logs format with down arrows ↓
     console.log(`Documento: ${fileName}`);
     console.log(`↓`);
     console.log(`Caracteres extraídos: ${charsCount}`);
     console.log(`↓`);
-    console.log(`Chunks: ${chunksCount}`);
+    console.log(`Chunks: ${finalStatus === "INDEXADO" ? chunksCount : 0}`);
     console.log(`↓`);
-    console.log(`Embeddings: ${embeddingsCount}`);
+    console.log(`Embeddings: ${finalStatus === "INDEXADO" ? embeddingsCount : 0}`);
     console.log(`↓`);
     console.log(`Persistido?: ${persisted}`);
     console.log(`↓`);
@@ -275,9 +282,9 @@ export async function saveKnowledge(
     // Update document record with final status and metadata in the database
     const finalUpdatePayload: any = {
       status: finalStatus,
-      total_chunks: chunksCount,
-      total_embeddings: embeddingsCount,
-      extracted_chars: charsCount,
+      total_chunks: finalStatus === "INDEXADO" ? chunksCount : 0,
+      total_embeddings: finalStatus === "INDEXADO" ? embeddingsCount : 0,
+      extracted_chars: finalStatus === "INDEXADO" ? charsCount : 0,
       updated_at: timestamp
     };
     if (storagePathParam) {
@@ -295,8 +302,8 @@ export async function saveKnowledge(
       document: fileName,
       date: timestamp,
       duration,
-      chunks_count: chunksCount,
-      embeddings_count: embeddingsCount,
+      chunks_count: finalStatus === "INDEXADO" ? chunksCount : 0,
+      embeddings_count: finalStatus === "INDEXADO" ? embeddingsCount : 0,
       success: finalStatus === "INDEXADO",
       error_message: finalStatus === "INDEXADO" ? undefined : "Indexação inválida ou falha no processamento."
     });

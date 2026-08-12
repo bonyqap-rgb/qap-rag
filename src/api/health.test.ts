@@ -9,6 +9,7 @@ import healthRouter from "./health.js";
 import { supabase } from "../config/supabase.js";
 
 const app = express();
+app.set("trust proxy", 1);
 app.use("/", healthRouter);
 
 const server: Server = app.listen(0);

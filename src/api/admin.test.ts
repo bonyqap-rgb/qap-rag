@@ -21,6 +21,7 @@ setEmbeddingImplementation(async (text) => {
 
 // Setup mock express server
 const app = express();
+app.set("trust proxy", 1);
 app.use(express.json());
 app.use("/documents", documentsRouter);
 app.use("/metrics", metricsRouter);

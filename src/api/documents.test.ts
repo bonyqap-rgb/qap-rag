@@ -12,6 +12,7 @@ import { ValidationError, NotFoundError } from "../services/document.service.js"
 
 // Initialize a clean test app
 const app = express();
+app.set("trust proxy", 1);
 app.use(express.json());
 app.use("/documents", documentsRouter);
 app.use(errorHandler);

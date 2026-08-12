@@ -12,6 +12,7 @@ import { ChatService } from "../services/chat.service.js";
 
 // Initialize express app with low rate limit of 2 requests for testing
 const app = express();
+app.set("trust proxy", 1);
 app.use(express.json());
 
 app.use("/chat", chatRateLimiter, chatRouter);
