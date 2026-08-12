@@ -215,3 +215,34 @@ export function resetEmbeddingImplementation() {
 export async function createEmbedding(text: string): Promise<number[]> {
   return embeddingImplementation(text);
 }
+
+/**
+ * Generates embeddings for a list of text chunks in batches, maintaining a throttle delay
+ * between API calls to prevent HTTP 429 Rate Limit issues.
+ *
+ * @param chunks - Array of text chunks
+ * @returns Array of 1536-dimensional embedding vectors
+ */
+export async function createEmbeddingsForChunks(chunks: string[]): Promise<number[][]> {
+  const embeddings: number[][] = [];
+  const batchSize = 16;
+  const delayMs = 300;
+
+  for (let i = 0; i < chunks.length; i += batchSize) {
+    const batch = chunks.slice(i, i + batchSize);
+    console.log(`[EMBEDDING BATCH] Processando lote de chunks ${Math.floor(i / batchSize) + 1}/${Math.ceil(chunks.length / batchSize)} (tamanho: ${batch.length})...`);
+
+    const batchPromises = batch.map(async (chunk) => {
+      return await createEmbedding(chunk);
+    });
+
+    const batchResults = await Promise.all(batchPromises);
+    embeddings.push(...batchResults);
+
+    if (i + batchSize < chunks.length) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  return embeddings;
+}

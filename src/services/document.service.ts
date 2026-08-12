@@ -1,7 +1,7 @@
 import { DocumentRepository } from "../repositories/document.repository.js";
 import { Document, DocumentProcessingStatus } from "../models/document.model.js";
 import { supabase } from "../config/supabase.js";
-import { createEmbedding } from "../groq/embed.js";
+import { createEmbedding, createEmbeddingsForChunks } from "../groq/embed.js";
 import { indexingHistoryService } from "./indexing-history.service.js";
 import { logger } from "./logger.service.js";
 import fs from "fs/promises";
@@ -433,14 +433,11 @@ export class DocumentService {
         // 3. Fatiar em chunks semânticos
         const chunksList = createChunks(text);
 
-        // 4. Gerar novos embeddings de 1536 dimensões
-        const embeddings: number[][] = [];
-        for (const chunk of chunksList) {
-          embeddings.push(await createEmbedding(chunk));
-        }
+        // 4. Gerar novos embeddings em lotes seguros com throttling para evitar HTTP 429
+        const embeddings = await createEmbeddingsForChunks(chunksList);
 
         // 5. Gravar novamente, Validar e Marcar como INDEXADO através de saveKnowledge
-        const updatedDocId = await saveKnowledge(filename, chunksList, embeddings);
+        const updatedDocId = await saveKnowledge(filename, chunksList, embeddings, kDocId, storagePath);
 
         const duration = Math.round(performance.now() - startTime);
 
@@ -496,22 +493,22 @@ export class DocumentService {
 
     try {
       const newChunksData = [];
-
-      for (const chunk of chunks) {
+      const cleanTexts = chunks.map(chunk => {
         let cleanText = chunk.content || "";
         const metaMatch = cleanText.match(/^\[METADATA:[\s\S]*?\]\n([\s\S]*)$/);
         if (metaMatch) {
           cleanText = metaMatch[1];
         }
-        cleanText = cleanText.trim();
+        return cleanText.trim();
+      });
 
-        // Regenerate embedding vector
-        const embedding = await createEmbedding(cleanText);
+      const regeneratedEmbeddings = await createEmbeddingsForChunks(cleanTexts);
 
+      for (let idx = 0; idx < chunks.length; idx++) {
         newChunksData.push({
-          chunk_index: chunk.chunk_index,
-          content: chunk.content,
-          embedding,
+          chunk_index: chunks[idx].chunk_index,
+          content: chunks[idx].content,
+          embedding: regeneratedEmbeddings[idx],
         });
       }
 

@@ -4,7 +4,7 @@ import fs from "fs/promises";
 import path from "path";
 import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
-import { createEmbedding } from "../groq/embed.js";
+import { createEmbedding, createEmbeddingsForChunks } from "../groq/embed.js";
 import { saveKnowledge } from "../services/saveKnowledge.js";
 import { logger } from "../services/logger.service.js";
 import { indexingHistoryService } from "../services/indexing-history.service.js";
@@ -166,10 +166,9 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
 
       console.log(`[UPLOAD] Gerando ${chunks.length} embeddings para o documento: ${req.file.originalname}`);
 
-      // Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
-      for (const chunk of chunks) {
-        embeddings.push(await createEmbedding(chunk));
-      }
+      // Geração de embeddings em lotes seguros com throttling para evitar HTTP 429 Rate Limits
+      const generatedEmbeddings = await createEmbeddingsForChunks(chunks);
+      embeddings.push(...generatedEmbeddings);
     } catch (processError: any) {
       // If error occurs during parsing, chunking or embedding generation, transition status to INDEXAÇÃO_INVÁLIDA
       if (documentId) {
@@ -192,7 +191,8 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       req.file.originalname,
       chunks,
       embeddings,
-      documentId
+      documentId,
+      savedPath
     );
 
     const duration = parseFloat((performance.now() - start).toFixed(2));

@@ -10,6 +10,50 @@ export class DocumentRepository {
   }
 
   /**
+   * Map database row representation to the unified application Document model.
+   */
+  private mapRowToDocument(row: any): Document {
+    let processingStatus: "pending" | "processing" | "completed" | "failed" = "completed";
+
+    if (row.status === "PENDENTE") {
+      processingStatus = "pending";
+    } else if (row.status === "PROCESSANDO") {
+      processingStatus = "processing";
+    } else if (row.status === "INDEXADO") {
+      processingStatus = "completed";
+    } else if (row.status === "INDEXAÇÃO_INVÁLIDA") {
+      processingStatus = "failed";
+    }
+
+    return {
+      id: row.id ?? "",
+      title: row.file_name ?? "",
+      category: "Geral",
+      version: "1.0",
+      source: "Upload",
+      language: "pt-BR",
+      filename: row.file_name ?? "",
+      fileSize: row.file_size ?? 1024,
+      mimeType: row.mime_type ?? "application/pdf",
+      totalPages: 1,
+      processingStatus,
+      createdAt: row.created_at ?? "",
+      updatedAt: row.updated_at || row.created_at || "",
+
+      // Dynamic RAG-specific database status & chunk fields
+      status: row.status ?? "PENDENTE",
+      totalChunks: row.total_chunks ?? 0,
+      total_chunks: row.total_chunks ?? 0,
+      totalEmbeddings: row.total_embeddings ?? 0,
+      total_embeddings: row.total_embeddings ?? 0,
+      extractedChars: row.extracted_chars ?? 0,
+      extracted_chars: row.extracted_chars ?? 0,
+      storagePath: row.storage_path ?? "",
+      storage_path: row.storage_path ?? "",
+    };
+  }
+
+  /**
    * List all documents sorted by creation date (descending)
    */
   async list(): Promise<Document[]> {
@@ -22,21 +66,7 @@ export class DocumentRepository {
       throw error;
     }
 
-    return (data || []).map((row: any) => ({
-      id: row.id ?? "",
-      title: row.file_name ?? "",
-      category: "Geral",
-      version: "1.0",
-      source: "Upload",
-      language: "pt-BR",
-      filename: row.file_name ?? "",
-      fileSize: 1024,
-      mimeType: "application/pdf",
-      totalPages: 1,
-      processingStatus: "completed",
-      createdAt: row.created_at ?? "",
-      updatedAt: row.updated_at || row.created_at || "",
-    }));
+    return (data || []).map((row: any) => this.mapRowToDocument(row));
   }
 
   /**
@@ -57,21 +87,7 @@ export class DocumentRepository {
       return null;
     }
 
-    return {
-      id: data.id ?? "",
-      title: data.file_name ?? "",
-      category: "Geral",
-      version: "1.0",
-      source: "Upload",
-      language: "pt-BR",
-      filename: data.file_name ?? "",
-      fileSize: 1024,
-      mimeType: "application/pdf",
-      totalPages: 1,
-      processingStatus: "completed",
-      createdAt: data.created_at ?? "",
-      updatedAt: data.updated_at || data.created_at || "",
-    };
+    return this.mapRowToDocument(data);
   }
 
   /**
@@ -91,21 +107,7 @@ export class DocumentRepository {
       throw error;
     }
 
-    return {
-      id: data.id ?? "",
-      title: data.file_name ?? "",
-      category: "Geral",
-      version: "1.0",
-      source: "Upload",
-      language: "pt-BR",
-      filename: data.file_name ?? "",
-      fileSize: 1024,
-      mimeType: "application/pdf",
-      totalPages: 1,
-      processingStatus: "completed",
-      createdAt: data.created_at ?? "",
-      updatedAt: data.updated_at || data.created_at || "",
-    };
+    return this.mapRowToDocument(data);
   }
 
   /**
@@ -133,21 +135,7 @@ export class DocumentRepository {
       return null;
     }
 
-    return {
-      id: data.id ?? "",
-      title: data.file_name ?? "",
-      category: "Geral",
-      version: "1.0",
-      source: "Upload",
-      language: "pt-BR",
-      filename: data.file_name ?? "",
-      fileSize: 1024,
-      mimeType: "application/pdf",
-      totalPages: 1,
-      processingStatus: "completed",
-      createdAt: data.created_at ?? "",
-      updatedAt: data.updated_at || data.created_at || "",
-    };
+    return this.mapRowToDocument(data);
   }
 
   /**
