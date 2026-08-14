@@ -1,4 +1,4 @@
-export type DocumentProcessingStatus = "pending" | "processing" | "completed" | "failed";
+export type DocumentProcessingStatus = "pending" | "processing" | "completed" | "failed" | "PENDENTE" | "PROCESSANDO" | "INDEXADO" | "INDEXAÇÃO_INVÁLIDA";
 
 export interface Document {
   id?: string;
@@ -12,6 +12,16 @@ export interface Document {
   mimeType?: string;
   totalPages?: number;
   processingStatus?: DocumentProcessingStatus;
+  status?: string;
+  totalChunks?: number;
+  total_chunks?: number;
+  chunks?: number;
+  totalEmbeddings?: number;
+  total_embeddings?: number;
+  extractedChars?: number;
+  extracted_chars?: number;
+  storagePath?: string;
+  storage_path?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -19,6 +29,7 @@ export interface Document {
 export interface DbDocument {
   id?: string;
   title?: string;
+  file_name?: string;
   category?: string;
   version?: string;
   source?: string;
@@ -28,6 +39,11 @@ export interface DbDocument {
   mime_type?: string;
   total_pages?: number;
   processing_status?: DocumentProcessingStatus;
+  status?: string;
+  total_chunks?: number;
+  total_embeddings?: number;
+  extracted_chars?: number;
+  storage_path?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -36,20 +52,41 @@ export interface DbDocument {
  * Maps a database representation of a document (snake_case) to the application representation (camelCase).
  */
 export function mapDbToDocument(dbDoc: DbDocument): Document {
+  const fileName = dbDoc?.file_name || dbDoc?.filename || dbDoc?.title || "";
+  const rawStatus = dbDoc?.status || "INDEXADO";
+  let procStatus: DocumentProcessingStatus = "completed";
+  if (rawStatus === "INDEXADO") procStatus = "completed";
+  else if (rawStatus === "PROCESSANDO") procStatus = "processing";
+  else if (rawStatus === "INDEXAÇÃO_INVÁLIDA") procStatus = "failed";
+  else if (rawStatus === "PENDENTE") procStatus = "pending";
+  else if (dbDoc?.processing_status) procStatus = dbDoc.processing_status;
+
+  const chunkCount = dbDoc?.total_chunks ?? 0;
+
   return {
     id: dbDoc?.id ?? "",
-    title: dbDoc?.title ?? "",
-    category: dbDoc?.category ?? "",
-    version: dbDoc?.version ?? "",
-    source: dbDoc?.source ?? "",
-    language: dbDoc?.language ?? "",
-    filename: dbDoc?.filename ?? "",
-    fileSize: dbDoc?.file_size ?? 0,
-    mimeType: dbDoc?.mime_type ?? "",
-    totalPages: dbDoc?.total_pages ?? 0,
-    processingStatus: dbDoc?.processing_status ?? "pending",
+    title: fileName,
+    category: dbDoc?.category ?? "Geral",
+    version: dbDoc?.version ?? "1.0",
+    source: dbDoc?.source ?? "Upload",
+    language: dbDoc?.language ?? "pt-BR",
+    filename: fileName,
+    fileSize: dbDoc?.file_size ?? 1024,
+    mimeType: dbDoc?.mime_type ?? "application/pdf",
+    totalPages: dbDoc?.total_pages ?? 1,
+    processingStatus: procStatus,
+    status: rawStatus,
+    totalChunks: chunkCount,
+    total_chunks: chunkCount,
+    chunks: chunkCount,
+    totalEmbeddings: dbDoc?.total_embeddings ?? 0,
+    total_embeddings: dbDoc?.total_embeddings ?? 0,
+    extractedChars: dbDoc?.extracted_chars ?? 0,
+    extracted_chars: dbDoc?.extracted_chars ?? 0,
+    storagePath: dbDoc?.storage_path ?? "",
+    storage_path: dbDoc?.storage_path ?? "",
     createdAt: dbDoc?.created_at ?? "",
-    updatedAt: dbDoc?.updated_at ?? "",
+    updatedAt: dbDoc?.updated_at || dbDoc?.created_at || "",
   };
 }
 

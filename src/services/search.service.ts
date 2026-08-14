@@ -12,6 +12,7 @@ export const HYBRID_MIN_LEXICAL_SCORE = 0.01;
 export const HYBRID_MAX_RESULTS = 10;
 
 const EXPLICIT_DOC_BOOST = 0.25;
+const ARTICLE_MATCH_BOOST = 0.35;
 const METADATA_QUALITY_BOOST = 0.08;
 const DIVERSITY_PENALTY_FACTOR = 0.08;
 
@@ -21,9 +22,31 @@ function normalizeQuery(text: string): string {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "") // remove accents
+    .replace(/[º°ª]/g, "") // remove ordinal indicators
     .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g, " ") // replace punctuation, hyphens, underscores with space
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/**
+ * Extracts article numbers (e.g. "6", "42") referenced in a search question.
+ */
+function extractArticleReferences(query: string): string[] {
+  const norm = normalizeQuery(query)
+    .replace(/\bartigo\b/g, "art")
+    .replace(/\bart\b/g, "art");
+
+  const matches = norm.match(/\bart\s*(\d+[a-z]?)\b/gi);
+  if (!matches) return [];
+
+  const refs = new Set<string>();
+  for (const m of matches) {
+    const numMatch = m.match(/\d+[a-z]?/i);
+    if (numMatch) {
+      refs.add(numMatch[0]);
+    }
+  }
+  return Array.from(refs);
 }
 
 /**
@@ -35,15 +58,31 @@ function computeFallbackLexicalScore(text: string, query: string): number {
   const normQuery = normalizeQuery(query);
   if (!normQuery || !normText) return 0;
 
-  const queryWords = normQuery.split(/\s+/).filter(w => w.length >= 2);
+  // Synonyms and abbreviations expansion for legal queries
+  let expandedQuery = normQuery
+    .replace(/\bartigo\b/g, "art")
+    .replace(/\bcodigo penal militar\b/g, "cpm")
+    .replace(/\bregulamento disciplinar\b/g, "rdpm")
+    .replace(/\bprocesso administrativo disciplinar\b/g, "pad");
+
+  let expandedText = normText
+    .replace(/\bartigo\b/g, "art")
+    .replace(/\bcodigo penal militar\b/g, "cpm")
+    .replace(/\bregulamento disciplinar\b/g, "rdpm")
+    .replace(/\bprocesso administrativo disciplinar\b/g, "pad");
+
+  const queryWords = Array.from(new Set([
+    ...normQuery.split(/\s+/),
+    ...expandedQuery.split(/\s+/)
+  ])).filter(w => w.length >= 2);
+
   if (queryWords.length === 0) return 0;
 
   let matchCount = 0;
   for (const word of queryWords) {
-    if (normText.includes(word)) {
+    if (normText.includes(word) || expandedText.includes(word)) {
       matchCount++;
-      // Give a tiny boost for exact multiple occurrences of key terms
-      const occurrences = (normText.match(new RegExp(word, "g")) || []).length;
+      const occurrences = (expandedText.match(new RegExp(word, "g")) || []).length;
       matchCount += Math.min(occurrences - 1, 3) * 0.05;
     }
   }
@@ -711,7 +750,21 @@ export class SearchService {
         reasons.push(`Explicit mention of document: "${cand.filename}" (+${EXPLICIT_DOC_BOOST})`);
       }
 
-      // 5.4.2. Metadata Quality Boost (+0.08)
+      // 5.4.2. Article Reference Match Boost (+0.35)
+      const requestedArticles = extractArticleReferences(queryText);
+      if (requestedArticles.length > 0) {
+        const normCandText = normalizeQuery(cand.cleanText);
+        for (const artNum of requestedArticles) {
+          const artRegex = new RegExp(`\\b(?:artigo|art)\\.?\\s*${artNum}\\b`, "i");
+          if (artRegex.test(normCandText)) {
+            finalScore += ARTICLE_MATCH_BOOST;
+            reasons.push(`Direct match for requested Article ${artNum} (+${ARTICLE_MATCH_BOOST})`);
+            break;
+          }
+        }
+      }
+
+      // 5.4.3. Metadata Quality Boost (+0.08)
       if (hasQualityMetadata(cand.cleanText, cand.metadata)) {
         finalScore += METADATA_QUALITY_BOOST;
         reasons.push(`High metadata quality (+${METADATA_QUALITY_BOOST})`);

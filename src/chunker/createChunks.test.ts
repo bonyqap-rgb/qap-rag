@@ -32,3 +32,11 @@ test("createChunks handles empty text", () => {
   const chunks = createChunks("", 100, 10);
   assert.strictEqual(chunks.length, 0);
 });
+
+test("createChunks preserves legal abbreviations like Art. 6º without splitting Art. from 6º", () => {
+  const text = `[PAGE_MARKER:1]\nArt. 6º Lugar do crime. Considera-se praticado o fato no lugar em que ocorreu a ação ou omissão.`;
+  const chunks = createChunks(text, 1000, 20);
+
+  assert.strictEqual(chunks.length, 1);
+  assert.strictEqual(chunks[0].includes("Art. 6º Lugar do crime"), true);
+});

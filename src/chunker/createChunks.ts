@@ -37,9 +37,8 @@ export function createChunks(
     if (pageMatch) {
       currentPage = parseInt(pageMatch[1], 10);
     } else {
-      // Split the line into sentences
-      // Match sentence-ending punctuation followed by space or end of string
-      const sentences = trimmed.split(/(?<=[.?!])\s+/);
+      // Split the line into sentences avoiding splitting on legal abbreviations (Art., Inc., Par., etc.)
+      const sentences = splitIntoSentences(trimmed);
       for (const sentence of sentences) {
         if (sentence.trim()) {
           segments.push({
@@ -117,4 +116,41 @@ export function createChunks(
   }
 
   return chunks;
+}
+
+/**
+ * Splits text into sentences while avoiding splitting after legal abbreviations
+ * such as Art., Inc., Par., Fls., Pág., Cap., Sec., Dr., Dra., Sr., Sra., n.º, etc.
+ */
+function splitIntoSentences(text: string): string[] {
+  if (!text) return [];
+
+  // Legal and common abbreviations regex that shouldn't trigger sentence end
+  const abbrevRegex = /\b(?:Art|art|ART|Inc|inc|INC|Par|par|PAR|Pág|pág|pag|Pag|Fls|fls|Cap|cap|Sec|sec|Item|item|Dr|dr|Dra|dra|Sr|sr|Sra|sra|n|N|v\.g|i\.e|e\.g)\.$/i;
+
+  const rawSplit = text.split(/(?<=[.?!])\s+/);
+  const sentences: string[] = [];
+  let buffer = "";
+
+  for (const part of rawSplit) {
+    if (!part.trim()) continue;
+
+    if (buffer) {
+      buffer += " " + part;
+    } else {
+      buffer = part;
+    }
+
+    const isAbbrev = abbrevRegex.test(buffer.trim());
+    if (!isAbbrev) {
+      sentences.push(buffer.trim());
+      buffer = "";
+    }
+  }
+
+  if (buffer.trim()) {
+    sentences.push(buffer.trim());
+  }
+
+  return sentences;
 }
