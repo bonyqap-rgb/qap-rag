@@ -47,6 +47,8 @@ interface EnvVariables {
   RATE_LIMIT_MAX_INDEX: number; // max requests per window for /documents/index
 
   // Embeddings provider keys (optional, dynamic fallback)
+  GEMINI_API_KEY?: string;
+  GOOGLE_API_KEY?: string;
   VOYAGE_API_KEY?: string;
   NOMIC_API_KEY?: string;
 }
@@ -75,6 +77,7 @@ function validateEnv(): EnvVariables {
   const supabaseUrl = (process.env.SUPABASE_URL || "").trim();
   const supabaseServiceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
   const groqApiKey = (process.env.GROQ_API_KEY || "").trim();
+  const geminiApiKey = process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.trim() : (process.env.GOOGLE_API_KEY ? process.env.GOOGLE_API_KEY.trim() : undefined);
   const voyageApiKey = process.env.VOYAGE_API_KEY ? process.env.VOYAGE_API_KEY.trim() : undefined;
   const nomicApiKey = process.env.NOMIC_API_KEY ? process.env.NOMIC_API_KEY.trim() : undefined;
   const groqChatModel = process.env.GROQ_CHAT_MODEL ? process.env.GROQ_CHAT_MODEL.trim() : "llama-3.3-70b-versatile";
@@ -125,6 +128,8 @@ function validateEnv(): EnvVariables {
     RATE_LIMIT_MAX_INDEX: process.env.RATE_LIMIT_MAX_INDEX ? parseInt(process.env.RATE_LIMIT_MAX_INDEX, 10) : 20,
 
     // Embeddings API Keys
+    GEMINI_API_KEY: geminiApiKey,
+    GOOGLE_API_KEY: geminiApiKey,
     VOYAGE_API_KEY: voyageApiKey,
     NOMIC_API_KEY: nomicApiKey,
   };

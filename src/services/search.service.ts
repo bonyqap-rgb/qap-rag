@@ -1,6 +1,6 @@
 import { supabase } from "../config/supabase.js";
 import { env } from "../config/env.js";
-import { createEmbedding } from "../groq/embed.js";
+import { createEmbedding } from "./embed.service.js";
 import { logger } from "./logger.service.js";
 import { metricsService } from "./metrics.service.js";
 
@@ -257,8 +257,8 @@ export class SearchService {
     const embedding = await createEmbedding(queryText);
     const embeddingDuration = performance.now() - embeddingStart;
 
-    // Enforce 1536-dimensional vectors and log dimension sent to RPC
-    const targetDimension = 1536;
+    // Enforce 768-dimensional vectors and log dimension sent to RPC
+    const targetDimension = 768;
     let finalEmbedding = [...embedding];
     if (finalEmbedding.length !== targetDimension) {
       console.warn(`[SEARCH] Dimensão do embedding gerado é incorreta: ${finalEmbedding.length}. Forçando ajuste para ${targetDimension}...`);

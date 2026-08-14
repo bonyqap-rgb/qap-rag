@@ -517,8 +517,8 @@ export class DocumentService {
 
       // Try RPC transaction update
       const rpcData = newChunksData.map(c => {
-        // Enforce 1536-dimensional vectors for perfect pgvector compatibility
-        const targetDimension = 1536;
+        // Enforce 768-dimensional vectors for perfect pgvector compatibility
+        const targetDimension = 768;
         let finalChunkEmbedding = c.embedding ? [...c.embedding] : [];
         if (finalChunkEmbedding.length !== targetDimension) {
           console.warn(`[REINDEX] Chunk ${c.chunk_index} com dimensão de embedding incorreta: ${finalChunkEmbedding.length}. Corrigindo...`);

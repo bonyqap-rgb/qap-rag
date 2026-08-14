@@ -26,8 +26,8 @@ export async function searchKnowledge(
     throw new Error("Vetor de busca de embedding inválido ou vazio.");
   }
 
-  // Enforce 1536-dimensional vectors and log dimension sent to RPC
-  const targetDimension = 1536;
+  // Enforce 768-dimensional vectors and log dimension sent to RPC
+  const targetDimension = 768;
   let finalEmbedding = [...embedding];
   if (finalEmbedding.length !== targetDimension) {
     console.warn(`[SEARCH KNOWLEDGE] Dimensão do embedding de busca é incorreta: ${finalEmbedding.length}. Forçando ajuste para ${targetDimension}...`);
