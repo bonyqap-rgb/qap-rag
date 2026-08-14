@@ -262,6 +262,143 @@ test("ChatService.resolveDocuments - resolves 'RDPM' keyword correctly", async (
   }
 });
 
+test("MANDATORY RAG TEST 1 - Artigo 6º do Código Penal Militar retrieval & grounded answer", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  const mockDocs = [
+    { id: "cpm-doc-id-123", file_name: "Direito Penal Militar e Processual Penal Militar.pdf" }
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({ data: mockDocs, error: null }),
+          then: (resolve: any) => resolve({ data: mockDocs, error: null })
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  SearchService.search = async (queryText, topK, scoreThreshold, filters) => {
+    return [
+      {
+        documentId: "cpm-doc-id-123",
+        chunkIndex: 0,
+        score: 0.95,
+        text: "Art. 6º Lugar do crime: Considera-se praticado o fato no lugar em que ocorreu a ação ou omissão, no todo ou em parte, bem como onde se produziu ou deveria produzir-se o resultado.",
+        metadata: {
+          sourceDocument: "Direito Penal Militar e Processual Penal Militar.pdf",
+          pageNumber: 1,
+        }
+      }
+    ];
+  };
+
+  setChatImplementation(async (question, context) => {
+    assert.ok(context.includes("Art. 6º Lugar do crime"), "Context sent to LLM must contain Art. 6º text");
+    return "De acordo com o Art. 6º do Código Penal Militar, considera-se praticado o fato no lugar em que ocorreu a ação ou omissão, no todo ou em parte, bem como onde se produziu ou deveria produzir-se o resultado.";
+  });
+
+  try {
+    const res = await ChatService.chat("Qual é o conteúdo do artigo 6º do Código Penal Militar?");
+
+    assert.ok(res.sources.length >= 1, "Must return at least 1 source");
+    assert.strictEqual(res.sources[0].filename, "Direito Penal Militar e Processual Penal Militar.pdf");
+    assert.ok(res.answer.includes("Art. 6º do Código Penal Militar"), "Answer must contain grounded information on Art. 6º");
+    assert.ok(res.answer.includes("ação ou omissão"), "Answer must describe Lugar do crime");
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});
+
+test("MANDATORY RAG TEST 2 - Artigo 42 do RDPM retrieval & grounded answer", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  const mockDocs = [
+    { id: "rdpm-doc-id-456", file_name: "RDPM_regulamento.pdf" }
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({ data: mockDocs, error: null }),
+          then: (resolve: any) => resolve({ data: mockDocs, error: null })
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  SearchService.search = async (queryText, topK, scoreThreshold, filters) => {
+    return [
+      {
+        documentId: "rdpm-doc-id-456",
+        chunkIndex: 5,
+        score: 0.92,
+        text: "Artigo 42 - As transgressões disciplinares classificam-se em graves, médias e leves, conforme a intensidade da falta e suas consequências.",
+        metadata: {
+          sourceDocument: "RDPM_regulamento.pdf",
+          pageNumber: 12,
+        }
+      }
+    ];
+  };
+
+  setChatImplementation(async (question, context) => {
+    assert.ok(context.includes("Artigo 42 - As transgressões disciplinares"), "Context sent to LLM must contain Artigo 42 text");
+    return "O Artigo 42 do RDPM estabelece que as transgressões disciplinares classificam-se em graves, médias e leves.";
+  });
+
+  try {
+    const res = await ChatService.chat("Qual é o conteúdo do artigo 42 do RDPM?");
+
+    assert.ok(res.sources.length >= 1, "Must return at least 1 source");
+    assert.strictEqual(res.sources[0].filename, "RDPM_regulamento.pdf");
+    assert.ok(res.answer.includes("Artigo 42 do RDPM"), "Answer must contain grounded information on Artigo 42");
+    assert.ok(res.answer.includes("transgressões disciplinares"), "Answer must describe transgressões disciplinares");
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});
+
+test("MANDATORY RAG TEST 3 - Irrelevant/ungrounded question returns empty context message with no sources", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({ data: [], error: null }),
+          then: (resolve: any) => resolve({ data: [], error: null })
+        })
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  SearchService.search = async () => [];
+
+  try {
+    const res = await ChatService.chat("Qual é a velocidade máxima de um foguete espacial na lua?");
+
+    assert.ok(res.answer.startsWith("Não encontrei essa informação na base de conhecimento."));
+    assert.strictEqual(res.sources.length, 0, "Must return 0 sources for ungrounded question");
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+  }
+});
+
 test("ChatService.resolveDocuments - should restrict correctly on explicit mentions", async () => {
   const originalFrom = supabase.from;
   const mockDocs = [

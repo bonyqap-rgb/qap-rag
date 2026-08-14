@@ -1,6 +1,6 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { supabase as defaultSupabase } from "../config/supabase.js";
-import { Document } from "../models/document.model.js";
+import { Document, mapDbToDocument } from "../models/document.model.js";
 
 export class DocumentRepository {
   private supabase: SupabaseClient;
@@ -22,21 +22,7 @@ export class DocumentRepository {
       throw error;
     }
 
-    return (data || []).map((row: any) => ({
-      id: row.id ?? "",
-      title: row.file_name ?? "",
-      category: "Geral",
-      version: "1.0",
-      source: "Upload",
-      language: "pt-BR",
-      filename: row.file_name ?? "",
-      fileSize: 1024,
-      mimeType: "application/pdf",
-      totalPages: 1,
-      processingStatus: "completed",
-      createdAt: row.created_at ?? "",
-      updatedAt: row.updated_at || row.created_at || "",
-    }));
+    return (data || []).map((row: any) => mapDbToDocument(row));
   }
 
   /**
@@ -57,21 +43,7 @@ export class DocumentRepository {
       return null;
     }
 
-    return {
-      id: data.id ?? "",
-      title: data.file_name ?? "",
-      category: "Geral",
-      version: "1.0",
-      source: "Upload",
-      language: "pt-BR",
-      filename: data.file_name ?? "",
-      fileSize: 1024,
-      mimeType: "application/pdf",
-      totalPages: 1,
-      processingStatus: "completed",
-      createdAt: data.created_at ?? "",
-      updatedAt: data.updated_at || data.created_at || "",
-    };
+    return mapDbToDocument(data);
   }
 
   /**
@@ -82,7 +54,8 @@ export class DocumentRepository {
       .from("knowledge_documents")
       .insert({
         id: doc.id,
-        file_name: doc.filename,
+        file_name: doc.filename || doc.title,
+        status: doc.status || "PENDENTE",
       })
       .select()
       .single();
@@ -91,21 +64,7 @@ export class DocumentRepository {
       throw error;
     }
 
-    return {
-      id: data.id ?? "",
-      title: data.file_name ?? "",
-      category: "Geral",
-      version: "1.0",
-      source: "Upload",
-      language: "pt-BR",
-      filename: data.file_name ?? "",
-      fileSize: 1024,
-      mimeType: "application/pdf",
-      totalPages: 1,
-      processingStatus: "completed",
-      createdAt: data.created_at ?? "",
-      updatedAt: data.updated_at || data.created_at || "",
-    };
+    return mapDbToDocument(data);
   }
 
   /**
@@ -116,11 +75,12 @@ export class DocumentRepository {
     doc: Partial<Omit<Document, "id" | "createdAt" | "updatedAt" | "filename" | "fileSize" | "mimeType" | "totalPages">>
   ): Promise<Document | null> {
     const timestamp = new Date().toISOString();
+    const updatePayload: any = { updated_at: timestamp };
+    if (doc.status) updatePayload.status = doc.status;
+
     const { data, error } = await this.supabase
       .from("knowledge_documents")
-      .update({
-        updated_at: timestamp
-      })
+      .update(updatePayload)
       .eq("id", id)
       .select()
       .maybeSingle();
@@ -133,21 +93,7 @@ export class DocumentRepository {
       return null;
     }
 
-    return {
-      id: data.id ?? "",
-      title: data.file_name ?? "",
-      category: "Geral",
-      version: "1.0",
-      source: "Upload",
-      language: "pt-BR",
-      filename: data.file_name ?? "",
-      fileSize: 1024,
-      mimeType: "application/pdf",
-      totalPages: 1,
-      processingStatus: "completed",
-      createdAt: data.created_at ?? "",
-      updatedAt: data.updated_at || data.created_at || "",
-    };
+    return mapDbToDocument(data);
   }
 
   /**

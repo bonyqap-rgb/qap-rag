@@ -187,7 +187,7 @@ export async function saveKnowledge(
 
         const enrichedContent = `[METADATA:${metadataHeader}]\n${pc.text}`;
 
-        const targetDimension = 1536;
+        const targetDimension = 768;
         let finalChunkEmbedding = pc.embedding ? [...pc.embedding] : [];
         if (finalChunkEmbedding.length !== targetDimension) {
           if (finalChunkEmbedding.length > targetDimension) {

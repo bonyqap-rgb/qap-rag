@@ -66,12 +66,13 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
   const normalizedText = text.trim();
   const cacheKey = generateHashKey(normalizedText);
 
+  const targetDimension = 768;
+
   // Return cached result if already computed to avoid redundant API queries
   const cached = embeddingCache.get(cacheKey);
   if (cached) {
     console.log(`[EMBEDDING CACHE] Retornando vetor em cache para: "${normalizedText.substring(0, 30)}..." - dimensão cached: ${cached.length}`);
     let finalCached = [...cached];
-    const targetDimension = 1536;
     if (finalCached.length !== targetDimension) {
       console.warn(`[EMBEDDING CACHE] Vetor em cache com dimensão incorreta: ${finalCached.length}. Forçando ajuste para ${targetDimension}...`);
       if (finalCached.length > targetDimension) {
@@ -87,11 +88,38 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
     return finalCached;
   }
 
+  const geminiKey = env.GEMINI_API_KEY || env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+
   // Define the core API operation with timeout protection
   const apiCall = () =>
     withTimeout(
       (async () => {
-        if (env.VOYAGE_API_KEY) {
+        if (geminiKey) {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${geminiKey}`;
+          const res = await fetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "models/text-embedding-004",
+              content: {
+                parts: [{ text: normalizedText }]
+              }
+            }),
+          });
+          if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Erro na API do Gemini Embedding (${res.status}): ${errText}`);
+          }
+          const data = await res.json() as any;
+          const embedding = data.embedding?.values;
+          if (!embedding || !Array.isArray(embedding)) {
+            throw new Error("Resposta da API de embedding do Gemini inválida ou vazia.");
+          }
+          console.log(`[GEMINI EMBEDDING text-embedding-004] dimensão original recebida: ${embedding.length}`);
+          return embedding;
+        } else if (env.VOYAGE_API_KEY) {
           const res = await fetch("https://api.voyageai.com/v1/embeddings", {
             method: "POST",
             headers: {
@@ -139,7 +167,7 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
           console.log(`[NOMIC] dimensão original recebida da API: ${embedding.length}`);
           return embedding;
         } else if (env.GROQ_API_KEY) {
-          // Generate embeddings using Groq SDK nomic-embed-text-v1_5 model as fallback/primary
+          // Generate embeddings using Groq SDK nomic-embed-text-v1_5 model as fallback
           const response = await groq.embeddings.create({
             model: process.env.GROQ_EMBED_MODEL || "nomic-embed-text-v1_5",
             input: normalizedText,
@@ -148,10 +176,10 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
           if (!embedding) {
             throw new Error("Resposta da API de embedding do Groq inválida ou vazia.");
           }
-          console.log(`[GROQ] dimensão original recebida da API: ${embedding.length}`);
+          console.log(`[GROQ nomic-embed-text-v1_5] dimensão original recebida da API: ${embedding.length}`);
           return embedding;
         } else {
-          throw new Error("Provedor de embedding não configurado. Defina VOYAGE_API_KEY, NOMIC_API_KEY ou GROQ_API_KEY no arquivo .env.");
+          throw new Error("Provedor de embedding não configurado. Defina GEMINI_API_KEY, GROQ_API_KEY, VOYAGE_API_KEY ou NOMIC_API_KEY no arquivo .env.");
         }
       })(),
       env.LLM_TIMEOUT
@@ -170,9 +198,7 @@ async function defaultEmbeddingImplementation(text: string): Promise<number[]> {
   const originalDimension = embeddingData.length;
   console.log(`[EMBEDDING] dimensão original recebida da API: ${originalDimension}`);
 
-  // Adjust the embedding vector to be exactly 1536 dimensions for perfect pgvector compatibility.
-  // Truncate if larger (e.g., 3072 dimensions) or pad with zeros if smaller (e.g., 768 or 1024 dimensions).
-  const targetDimension = 1536;
+  // Enforce exactly 768 dimensions for pgvector VECTOR(768) compatibility.
   let finalEmbedding = [...embeddingData];
   if (finalEmbedding.length > targetDimension) {
     finalEmbedding = finalEmbedding.slice(0, targetDimension);
