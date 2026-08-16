@@ -167,6 +167,63 @@ export class SearchService {
       }
     }
 
+    // 5. Hybrid Search: If query references a specific article (e.g. "artigo 6º", "art. 6º", "artigo 42"), perform keyword search
+    const articleMatch = queryText.match(/(?:artigo|art\.?)\s*(\d+[ºª°]?|\d+)/i);
+    if (articleMatch) {
+      const numStr = articleMatch[1].trim();
+      const cleanNum = numStr.replace(/[ºª°]/g, "").trim();
+
+      const patterns = [
+        `Art. ${numStr}`,
+        `Artigo ${numStr}`,
+        `Art. ${cleanNum}º`,
+        `Artigo ${cleanNum}º`,
+        `Art. ${cleanNum} `,
+        `Artigo ${cleanNum} `,
+      ];
+
+      try {
+        let kwQuery = supabase
+          .from("knowledge_chunks")
+          .select("document_id, chunk_index, content");
+
+        const orFilter = patterns.map((p) => `content.ilike.%${p}%`).join(",");
+        kwQuery = kwQuery.or(orFilter);
+
+        if (activeDocumentIdFilters !== null) {
+          if (activeDocumentIdFilters.length === 1) {
+            kwQuery = kwQuery.eq("document_id", activeDocumentIdFilters[0]);
+          } else {
+            kwQuery = kwQuery.in("document_id", activeDocumentIdFilters);
+          }
+        }
+
+        const { data: kwResults } = await kwQuery.limit(5);
+
+        if (kwResults && kwResults.length > 0) {
+          for (const item of kwResults) {
+            let cleanText = item.content || "";
+            const metaMatch = cleanText.match(/^\[METADATA:[\s\S]*?\]\n([\s\S]*)$/);
+            if (metaMatch) cleanText = metaMatch[1];
+            cleanText = cleanText.trim();
+            const textKey = cleanText.toLowerCase();
+
+            if (!seenTexts.has(textKey)) {
+              seenTexts.add(textKey);
+              uniqueResults.push({
+                documentId: item.document_id,
+                chunkIndex: item.chunk_index ?? 0,
+                score: 0.99, // Priority score for explicit article keyword match
+                text: cleanText,
+              });
+            }
+          }
+        }
+      } catch (err: any) {
+        logger.warn(`[SEARCH] Erro na busca léxica complementar por artigo: ${err.message || err}`);
+      }
+    }
+
     // Ensure results are strictly ordered by relevance (score descending)
     uniqueResults.sort((a, b) => b.score - a.score);
 

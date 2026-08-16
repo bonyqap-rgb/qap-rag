@@ -109,6 +109,48 @@ test("SearchService - search successfully with results sorted by score", async (
   }
 });
 
+test("SearchService - hybrid article keyword search prioritizes exact article matches", async () => {
+  const originalRpc = supabase.rpc;
+  const originalFrom = supabase.from;
+
+  supabase.rpc = function () {
+    return { data: [], error: null } as any;
+  };
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_chunks") {
+      return {
+        select: () => ({
+          or: () => ({
+            limit: () => Promise.resolve({
+              data: [
+                {
+                  document_id: "doc-cpm",
+                  chunk_index: 5,
+                  content: "[METADATA:{\"sourceDocument\":\"cpm.pdf\"}]\nArt. 6º Considera-se praticado o crime no lugar em que ocorreu a ação...",
+                },
+              ],
+              error: null,
+            }),
+          }),
+        }),
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  try {
+    const results = await SearchService.search("Qual é o conteúdo do artigo 6º do Código Penal Militar?", 5, 0.3);
+
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0].score, 0.99);
+    assert.ok(results[0].text.includes("Art. 6º Considera-se praticado o crime"));
+  } finally {
+    supabase.rpc = originalRpc;
+    supabase.from = originalFrom;
+  }
+});
+
 test("SearchService - search applies scoreThreshold correctly", async () => {
   const originalRpc = supabase.rpc;
   supabase.rpc = function (fnName: string) {
