@@ -186,3 +186,97 @@ test("ChatService.chat - input validation empty question", async () => {
     }
   );
 });
+
+test("ChatService.chat - Artigo 6º do CPM exact retrieval and sources match context", async () => {
+  const originalSearch = SearchService.search;
+  SearchService.search = async () => [
+    {
+      documentId: "doc-cpm-123",
+      chunkIndex: 5,
+      score: 0.99,
+      text: "Art. 6º Considera-se praticado o crime no lugar em que ocorreu a ação ou omissão...",
+    },
+  ];
+
+  const originalFrom = supabase.from;
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{ id: "doc-cpm-123", file_name: "cpm.pdf" }],
+            error: null,
+          }),
+        }),
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  let receivedUserPrompt = "";
+  setChatImplementation(async (question, context, options) => {
+    receivedUserPrompt = options?.userPrompt || "";
+    return "De acordo com o Art. 6º do Código Penal Militar, considera-se praticado o crime no lugar em que ocorreu a ação ou omissão.";
+  });
+
+  try {
+    const res = await ChatService.chat("Qual é o conteúdo do artigo 6º do Código Penal Militar?");
+
+    assert.ok(receivedUserPrompt.includes("Art. 6º Considera-se praticado o crime"));
+    assert.strictEqual(res.sources.length, 1);
+    assert.strictEqual(res.sources[0].filename, "cpm.pdf");
+    assert.strictEqual(res.sources[0].chunkIndex, 5);
+    assert.strictEqual(res.sources[0].score, 0.99);
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});
+
+test("ChatService.chat - Artigo 13 do RDPM exact retrieval and sources match context", async () => {
+  const originalSearch = SearchService.search;
+  SearchService.search = async () => [
+    {
+      documentId: "doc-rdpm-456",
+      chunkIndex: 12,
+      score: 0.99,
+      text: "Art. 13 São transgressões disciplinares de natureza grave...",
+    },
+  ];
+
+  const originalFrom = supabase.from;
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{ id: "doc-rdpm-456", file_name: "rdpm.pdf" }],
+            error: null,
+          }),
+        }),
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  let receivedUserPrompt = "";
+  setChatImplementation(async (question, context, options) => {
+    receivedUserPrompt = options?.userPrompt || "";
+    return "O artigo 13 do RDPM especifica as transgressões disciplinares de natureza grave.";
+  });
+
+  try {
+    const res = await ChatService.chat("Traga o artigo 13 do RDPM");
+
+    assert.ok(receivedUserPrompt.includes("Art. 13 São transgressões disciplinares de natureza grave"));
+    assert.strictEqual(res.sources.length, 1);
+    assert.strictEqual(res.sources[0].filename, "rdpm.pdf");
+    assert.strictEqual(res.sources[0].chunkIndex, 12);
+    assert.strictEqual(res.sources[0].score, 0.99);
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});

@@ -178,8 +178,12 @@ export class SearchService {
         `Artigo ${numStr}`,
         `Art. ${cleanNum}º`,
         `Artigo ${cleanNum}º`,
+        `Art. ${cleanNum}°`,
+        `Artigo ${cleanNum}°`,
         `Art. ${cleanNum} `,
         `Artigo ${cleanNum} `,
+        `Art. ${cleanNum}\n`,
+        `Artigo ${cleanNum}\n`,
       ];
 
       try {

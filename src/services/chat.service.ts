@@ -179,8 +179,8 @@ export class ChatService {
       }
     }
 
-    // 6. Build Context and Prompts
-    const context = ContextBuilderService.buildContext(searchResults, maxContextSize);
+    // 6. Build Context and Prompts directly using finalUsedChunks text
+    const context = currentContextText;
     const systemPrompt = PromptBuilderService.buildSystemPrompt();
     const userPrompt = PromptBuilderService.buildUserPrompt(question, context);
 
