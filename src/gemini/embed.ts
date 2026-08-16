@@ -83,6 +83,9 @@ export async function createEmbedding(text: string): Promise<number[]> {
       ai.models.embedContent({
         model: "gemini-embedding-001",
         contents: normalizedText,
+        config: {
+          outputDimensionality: 768,
+        },
       }),
       env.LLM_TIMEOUT
     );

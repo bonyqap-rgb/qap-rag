@@ -5,6 +5,7 @@ import { createChunks } from "../chunker/createChunks.js";
 import { createEmbedding } from "../gemini/embed.js";
 import { saveKnowledge } from "../services/saveKnowledge.js";
 import { logger } from "../services/logger.service.js";
+import { supabase } from "../config/supabase.js";
 import { indexingHistoryService } from "../services/indexing-history.service.js";
 
 const router = Router();
@@ -62,6 +63,45 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       chunks,
       embeddings
     );
+
+    // 5. Synchronize public.documents metadata table status
+    try {
+      const { data: existingDoc } = await supabase
+        .from("documents")
+        .select("id")
+        .eq("filename", req.file.originalname)
+        .maybeSingle();
+
+      const pageCount = (text.match(/\[PAGE:\d+\]/g) || []).length || 1;
+
+      if (existingDoc) {
+        await supabase
+          .from("documents")
+          .update({
+            processing_status: "completed",
+            total_pages: pageCount,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", existingDoc.id);
+      } else {
+        await supabase
+          .from("documents")
+          .insert({
+            title: req.file.originalname.replace(/\.[^/.]+$/, ""),
+            category: "Geral",
+            version: "1.0",
+            source: "Upload",
+            language: "pt-BR",
+            filename: req.file.originalname,
+            file_size: req.file.size,
+            mime_type: req.file.mimetype || "application/pdf",
+            total_pages: pageCount,
+            processing_status: "completed",
+          });
+      }
+    } catch (err: any) {
+      logger.warn(`[UPLOAD] Erro ao sincronizar tabela documents: ${err.message || err}`);
+    }
 
     const duration = parseFloat((performance.now() - start).toFixed(2));
 
