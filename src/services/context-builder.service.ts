@@ -38,8 +38,13 @@ export class ContextBuilderService {
       }
     }
 
-    // 2. Sort to preserve document order (by documentId, then chunkIndex ascending)
+    // 2. Sort by relevance score descending so highest relevance chunks are always preserved first
     const sortedChunks = [...uniqueChunks].sort((a, b) => {
+      const scoreA = a.score ?? 0;
+      const scoreB = b.score ?? 0;
+      if (scoreA !== scoreB) {
+        return scoreB - scoreA;
+      }
       if (a.documentId !== b.documentId) {
         return a.documentId.localeCompare(b.documentId);
       }

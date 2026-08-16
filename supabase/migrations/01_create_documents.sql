@@ -67,6 +67,33 @@ CREATE TABLE IF NOT EXISTS public.knowledge_chunks (
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_document_id ON public.knowledge_chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_embedding ON public.knowledge_chunks USING hnsw (embedding vector_cosine_ops);
 
+-- Create match_documents RPC function for vector similarity search
+CREATE OR REPLACE FUNCTION public.match_documents(
+    query_embedding VECTOR(768),
+    match_count INT DEFAULT 10
+)
+RETURNS TABLE (
+    document_id UUID,
+    chunk_index INT,
+    content TEXT,
+    similarity FLOAT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        kc.document_id,
+        kc.chunk_index,
+        kc.content,
+        (1 - (kc.embedding <=> query_embedding))::FLOAT AS similarity
+    FROM public.knowledge_chunks kc
+    ORDER BY kc.embedding <=> query_embedding
+    LIMIT match_count;
+END;
+$$;
+
 -- Enable RLS on storage.objects if not already enabled
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 
