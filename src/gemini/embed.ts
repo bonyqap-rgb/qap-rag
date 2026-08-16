@@ -7,7 +7,7 @@ import { geminiCircuitBreaker } from "../services/circuit-breaker.service.js";
 dotenv.config();
 
 const ai = new GoogleGenAI({
-  apiKey: process.env.GOOGLE_API_KEY!,
+  apiKey: env.GEMINI_API_KEY,
 });
 
 /**
