@@ -11,6 +11,7 @@ export interface Document {
   fileSize: number;
   mimeType: string;
   totalPages: number;
+  extractedText?: string;
   processingStatus: DocumentProcessingStatus;
   createdAt: string;
   updatedAt: string;
@@ -27,6 +28,7 @@ export interface DbDocument {
   file_size: number;
   mime_type: string;
   total_pages: number;
+  extracted_text?: string;
   processing_status: DocumentProcessingStatus;
   created_at: string;
   updated_at: string;
@@ -47,6 +49,7 @@ export function mapDbToDocument(dbDoc: DbDocument): Document {
     fileSize: dbDoc.file_size,
     mimeType: dbDoc.mime_type,
     totalPages: dbDoc.total_pages,
+    extractedText: dbDoc.extracted_text,
     processingStatus: dbDoc.processing_status,
     createdAt: dbDoc.created_at,
     updatedAt: dbDoc.updated_at,
@@ -68,6 +71,7 @@ export function mapDocumentToDb(doc: Partial<Document>): Partial<DbDocument> {
   if (doc.fileSize !== undefined) dbDoc.file_size = doc.fileSize;
   if (doc.mimeType !== undefined) dbDoc.mime_type = doc.mimeType;
   if (doc.totalPages !== undefined) dbDoc.total_pages = doc.totalPages;
+  if (doc.extractedText !== undefined) dbDoc.extracted_text = doc.extractedText;
   if (doc.processingStatus !== undefined) dbDoc.processing_status = doc.processingStatus;
   if (doc.createdAt !== undefined) dbDoc.created_at = doc.createdAt;
   if (doc.updatedAt !== undefined) dbDoc.updated_at = doc.updatedAt;

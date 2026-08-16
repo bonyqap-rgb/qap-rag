@@ -93,6 +93,19 @@ router.post("/:id/reindex", async (req: Request, res: Response, next: NextFuncti
 });
 
 /**
+ * GET /documents/:id/diagnostic
+ * Administrative diagnostic check confirming document indexing health.
+ */
+router.get("/:id/diagnostic", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const diagnostic = await documentService.getDiagnosticInfo(req.params.id as string);
+    return res.status(200).json(diagnostic);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /documents/:id
  * Retrieves a single document by ID.
  */

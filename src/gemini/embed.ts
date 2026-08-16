@@ -99,6 +99,13 @@ export async function createEmbedding(text: string): Promise<number[]> {
     throw new Error("Resposta da API de embedding inválida ou vazia.");
   }
 
+  const EXPECTED_DIMENSION = 768;
+  if (embedding.length !== EXPECTED_DIMENSION) {
+    const errorMsg = `[EMBEDDING ERROR] Dimensão inválida retornada pelo modelo. Modelo: "gemini-embedding-001", dimensão recebida: ${embedding.length}, dimensão esperada: ${EXPECTED_DIMENSION}`;
+    console.error(errorMsg);
+    throw new Error(errorMsg);
+  }
+
   // Populate cache for subsequent operations
   embeddingCache.set(cacheKey, embedding);
 

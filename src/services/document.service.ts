@@ -229,6 +229,52 @@ export class DocumentService {
   }
 
   /**
+   * Diagnostic verification endpoint to confirm document indexing health.
+   */
+  async getDiagnosticInfo(id: string): Promise<any> {
+    const doc = await this.getDocumentById(id);
+
+    const { data: kDoc } = await supabase
+      .from("knowledge_documents")
+      .select("id, created_at, updated_at")
+      .eq("file_name", doc.filename)
+      .maybeSingle();
+
+    let chunksCount = 0;
+    let embeddingsCount = 0;
+    let sampleDimension = 0;
+
+    if (kDoc) {
+      const { data: chunks, count } = await supabase
+        .from("knowledge_chunks")
+        .select("id, embedding", { count: "exact" })
+        .eq("document_id", kDoc.id);
+
+      chunksCount = count || (chunks ? chunks.length : 0);
+      embeddingsCount = chunksCount;
+
+      if (chunks && chunks.length > 0 && chunks[0].embedding) {
+        sampleDimension = Array.isArray(chunks[0].embedding)
+          ? chunks[0].embedding.length
+          : (typeof chunks[0].embedding === "string"
+              ? JSON.parse(chunks[0].embedding).length
+              : 768);
+      }
+    }
+
+    return {
+      document: doc.filename,
+      id: doc.id,
+      extractedCharacters: doc.extractedText?.length || 0,
+      chunks: chunksCount,
+      embeddings: embeddingsCount,
+      embeddingDimension: sampleDimension || (embeddingsCount > 0 ? 768 : 0),
+      status: doc.processingStatus,
+      indexingDate: kDoc?.updated_at || doc.updatedAt,
+    };
+  }
+
+  /**
    * Retrieves statistics of the knowledge base.
    */
   async getKnowledgeBaseStats(): Promise<any> {

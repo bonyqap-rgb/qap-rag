@@ -19,7 +19,7 @@ globalThis.fetch = async (url: any, options: any) => {
       json: async () => ({
         embeddings: [
           {
-            values: Array(1536).fill(0.1)
+            values: Array(768).fill(0.1)
           }
         ]
       })
