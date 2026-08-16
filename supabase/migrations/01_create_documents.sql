@@ -37,6 +37,22 @@ CREATE TABLE IF NOT EXISTS public.knowledge_documents (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+-- Create indexing_history table
+CREATE TABLE IF NOT EXISTS public.indexing_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document VARCHAR(255) NOT NULL,
+    date TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    duration INTEGER NOT NULL,
+    chunks_count INTEGER NOT NULL,
+    embeddings_count INTEGER NOT NULL,
+    success BOOLEAN NOT NULL,
+    error_message TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_indexing_history_date ON public.indexing_history(date DESC);
+COMMENT ON TABLE public.indexing_history IS 'Stores history of PDF parsing, chunking, and embedding generation runs.';
+
 -- Create knowledge_chunks table with vector support
 CREATE TABLE IF NOT EXISTS public.knowledge_chunks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
