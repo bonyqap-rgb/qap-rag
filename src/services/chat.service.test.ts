@@ -262,6 +262,162 @@ test("ChatService.resolveDocuments - resolves 'RDPM' keyword correctly", async (
   }
 });
 
+test("ChatService.chat - pergunta de conteúdo retorna texto literal diretamente sem LLM", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  SearchService.search = async () => [
+    {
+      documentId: "doc-rdpm-123",
+      chunkIndex: 0,
+      score: 0.95,
+      text: "Artigo 13 - As transgressões disciplinares classificam-se em:\nI - graves;\nII - médias;\nIII - leves.",
+    },
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{ id: "doc-rdpm-123", file_name: "RDPM.pdf" }],
+            error: null,
+          }),
+        }),
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  let llmCalled = false;
+  setChatImplementation(async () => {
+    llmCalled = true;
+    return "Resposta do LLM que NAO deveria ser chamada";
+  });
+
+  try {
+    const res = await ChatService.chat("Qual é o conteúdo do artigo 13 do RDPM?");
+
+    assert.strictEqual(llmCalled, false, "O LLM não deve ser chamado para pergunta de conteúdo literal.");
+    assert.strictEqual(
+      res.answer,
+      "Artigo 13 - As transgressões disciplinares classificam-se em:\nI - graves;\nII - médias;\nIII - leves."
+    );
+    assert.strictEqual(res.sources.length, 1);
+    assert.strictEqual(res.sources[0].filename, "RDPM.pdf");
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});
+
+test("ChatService.chat - pergunta de explicação passa pelo LLM", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  SearchService.search = async () => [
+    {
+      documentId: "doc-rdpm-123",
+      chunkIndex: 0,
+      score: 0.95,
+      text: "Artigo 13 - As transgressões disciplinares classificam-se em:\nI - graves;\nII - médias;\nIII - leves.",
+    },
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{ id: "doc-rdpm-123", file_name: "RDPM.pdf" }],
+            error: null,
+          }),
+        }),
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  let llmCalled = false;
+  setChatImplementation(async () => {
+    llmCalled = true;
+    return "O artigo 13 classifica as infrações em três níveis de gravidade.";
+  });
+
+  try {
+    const res = await ChatService.chat("Explique como funciona a classificação das transgressões no artigo 13 do RDPM");
+
+    assert.strictEqual(llmCalled, true, "O LLM deve ser chamado para perguntas de explicação/interpretação.");
+    assert.strictEqual(res.answer, "O artigo 13 classifica as infrações em três níveis de gravidade.");
+    assert.strictEqual(res.sources.length, 1);
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});
+
+test("ChatService.chat - contexto parcial sinaliza transcrição parcial sem inventar/completar", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  SearchService.search = async () => [
+    {
+      documentId: "doc-rdpm-123",
+      chunkIndex: 1,
+      score: 0.88,
+      text: "I - graves;\nII - médias;\nIII - leves",
+    },
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{ id: "doc-rdpm-123", file_name: "RDPM.pdf" }],
+            error: null,
+          }),
+        }),
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  let llmCalled = false;
+  setChatImplementation(async () => {
+    llmCalled = true;
+    return "LLM inventado";
+  });
+
+  try {
+    const res = await ChatService.chat("Qual a redação do artigo 13?");
+
+    assert.strictEqual(llmCalled, false);
+    assert.ok(res.answer.startsWith("Transcrição parcial (trecho disponível na base de conhecimento):"));
+    assert.ok(res.answer.includes("I - graves;\nII - médias;\nIII - leves"));
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});
+
+test("ChatService.chat - ausência de contexto relevante mantém a resposta padrão existente", async () => {
+  const originalSearch = SearchService.search;
+  SearchService.search = async () => [];
+
+  try {
+    const res = await ChatService.chat("Qual é o texto do artigo 9999 do RDPM?");
+
+    assert.ok(res.answer.startsWith("Não encontrei essa informação na base de conhecimento."));
+    assert.strictEqual(res.sources.length, 0);
+  } finally {
+    SearchService.search = originalSearch;
+  }
+});
+
 test("ChatService.resolveDocuments - should restrict correctly on explicit mentions", async () => {
   const originalFrom = supabase.from;
   const mockDocs = [

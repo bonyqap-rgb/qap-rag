@@ -156,6 +156,78 @@ function getFilenameAliases(fileName: string): string[] {
   return Array.from(aliases).filter(a => a.trim().length >= 2);
 }
 
+/**
+ * Checks whether a question is asking for a literal transcription of an article/text,
+ * as opposed to an explanation, interpretation, summary, or comparison.
+ */
+export function isLiteralArticleRequest(question: string): boolean {
+  if (!question || typeof question !== "string") return false;
+  const norm = normalizeText(question);
+
+  // Explanation, interpretation, summary, or comparison queries MUST go to LLM
+  const isExplanationOrSummary = /\b(explique|explicar|explicacao|explicação|interprete|interpretar|interpretacao|interpretação|resuma|resumo|resumir|compare|comparar|comparacao|comparação|por que|porque|como funciona|qual a diferenca|qual a diferença)\b/i.test(norm);
+  if (isExplanationOrSummary) {
+    return false;
+  }
+
+  // Literal transcription trigger terms
+  const literalTriggers = [
+    "conteudo",
+    "conteudo do artigo",
+    "texto",
+    "texto do artigo",
+    "redacao",
+    "redacao do artigo",
+    "o que diz",
+    "o que dizem",
+    "transcreva",
+    "transcrever",
+    "transcricao",
+    "transcrição",
+    "integra",
+    "integra do artigo",
+    "copie",
+    "qual o texto",
+    "qual e o texto",
+    "qual a redacao",
+    "qual a redação",
+    "qual o conteudo",
+    "qual e o conteudo"
+  ];
+
+  for (const trigger of literalTriggers) {
+    const escaped = escapeRegex(trigger);
+    const regex = new RegExp(`\\b${escaped}\\b`, "i");
+    if (regex.test(norm)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Determines whether retrieved text represents a partial article excerpt.
+ */
+export function isPartialArticleChunk(text: string): boolean {
+  if (!text || text.trim() === "") return true;
+  const trimmed = text.trim();
+
+  // Check if text starts with "Artigo" or "Art." or "Art"
+  const startsWithArticleHeader = /^\b(?:Artigo|Art\.)\s*\d+/i.test(trimmed);
+  if (!startsWithArticleHeader) {
+    return true; // Missing article header -> partial excerpt
+  }
+
+  // Check if text ends abruptly without terminal punctuation
+  const endsWithTerminalPunctuation = /[.!?;\:]$/.test(trimmed);
+  if (!endsWithTerminalPunctuation) {
+    return true; // Incomplete sentence/paragraph -> partial excerpt
+  }
+
+  return false;
+}
+
 export class ChatService {
   /**
    * Resolves document scope based on keywords inside the question or filters.
@@ -506,10 +578,68 @@ ${globalResultsCount !== undefined ? globalResultsCount : "N/A"}`);
       };
     }
 
+    // 7. Direct Article Transcription Bypass (No LLM generation for literal requests)
+    if (isLiteralArticleRequest(question)) {
+      const generationStartTime = performance.now();
+
+      const docGroupedTexts: Record<string, string[]> = {};
+      for (const chunk of finalUsedChunks) {
+        const docName = docMap.get(chunk.documentId) || chunk.documentName || "Desconhecido";
+        if (!docGroupedTexts[docName]) {
+          docGroupedTexts[docName] = [];
+        }
+        docGroupedTexts[docName].push(chunk.text);
+      }
+
+      const responseParts: string[] = [];
+      const isMultiDoc = Object.keys(docGroupedTexts).length > 1;
+
+      for (const [docName, texts] of Object.entries(docGroupedTexts)) {
+        const exactText = texts.join("\n\n").trim();
+        const header = isMultiDoc ? `**${docName}**\n` : "";
+        const isPartial = isPartialArticleChunk(exactText);
+
+        if (isPartial) {
+          responseParts.push(`${header}Transcrição parcial (trecho disponível na base de conhecimento):\n\n${exactText}`);
+        } else {
+          responseParts.push(`${header}${exactText}`);
+        }
+      }
+
+      const directAnswer = responseParts.join("\n\n---\n\n");
+      const generationTimeMs = performance.now() - generationStartTime;
+      const overallDuration = performance.now() - overallStartTime;
+
+      const sources: ChatSource[] = finalUsedChunks.map((c) => ({
+        documentId: c.documentId,
+        filename: docMap.get(c.documentId) || c.documentName || "Desconhecido",
+        chunkIndex: c.chunkIndex,
+        score: c.score !== undefined ? parseFloat(c.score.toFixed(4)) : 0,
+      }));
+
+      logger.info("Fluxo de Chat RAG concluído via transcrição direta (sem LLM)", {
+        searchTimeMs: parseFloat(searchTimeMs.toFixed(2)),
+        generationTimeMs: parseFloat(generationTimeMs.toFixed(2)),
+        totalTimeMs: parseFloat(overallDuration.toFixed(2)),
+        documentsCount: new Set(sources.map((s) => s.documentId)).size,
+        chunksCount: sources.length,
+      });
+
+      return {
+        answer: directAnswer,
+        sources,
+        metadata: {
+          searchTime: `${searchTimeMs.toFixed(0)}ms`,
+          generationTime: `${generationTimeMs.toFixed(0)}ms`,
+          totalTime: `${overallDuration.toFixed(0)}ms`,
+        },
+      };
+    }
+
     const systemPrompt = PromptBuilderService.buildSystemPrompt();
     const userPrompt = PromptBuilderService.buildUserPrompt(question, context);
 
-    // 7. Invoke LLM Groq API
+    // 8. Invoke LLM Groq API (for explanations, interpretations, summaries, comparisons)
     const generationStartTime = performance.now();
     let answer = "";
     try {
