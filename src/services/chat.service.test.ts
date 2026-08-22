@@ -3,7 +3,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = "dummy_key";
 process.env.GROQ_API_KEY = "dummy_key";
 import { test } from "node:test";
 import assert from "node:assert";
-import { ChatService, isLiteralArticleRequest, isPartialArticleChunk } from "./chat.service.js";
+import { ChatService, isLiteralArticleRequest, isPartialArticleChunk, extractRequestedArticleNumber, extractArticleFromText } from "./chat.service.js";
 import { SearchService } from "./search.service.js";
 import { ContextBuilderService } from "./context-builder.service.js";
 import { setChatImplementation, resetChatImplementation } from "../groq/chat.js";
@@ -281,6 +281,81 @@ test("isLiteralArticleRequest and isPartialArticleChunk helper logic", () => {
   assert.strictEqual(isPartialArticleChunk("Artigo 10º O recurso deve ser interposto em 5 dias."), false);
   assert.strictEqual(isPartialArticleChunk("O recurso deve ser interposto em 5 dias."), true); // no article header
   assert.strictEqual(isPartialArticleChunk("Artigo 10º O recurso deve ser interposto"), true); // no terminal punctuation
+});
+
+test("extractRequestedArticleNumber and extractArticleFromText unit tests", () => {
+  assert.strictEqual(extractRequestedArticleNumber("o que diz o artigo 23?"), "23");
+  assert.strictEqual(extractRequestedArticleNumber("qual o texto do Art. 105-Aº"), "105-A");
+  assert.strictEqual(extractRequestedArticleNumber("como funciona o recurso?"), null);
+
+  const chunkWithMultipleArticles = `Art. 22. As transgressões leves serão punidas com advertência.
+
+Art. 23. A transgressão média sujeita o militar à prestação de serviço extraordinário.
+
+Art. 24. A transgressão grave será punida com a exclusão a bem da disciplina.`;
+
+  const extracted = extractArticleFromText(chunkWithMultipleArticles, "23");
+  assert.strictEqual(
+    extracted,
+    "Art. 23. A transgressão média sujeita o militar à prestação de serviço extraordinário."
+  );
+});
+
+test("ChatService.chat - literal query for specific article in multi-article chunk returns only requested article", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  const multiArticleChunkText = `Art. 22. As transgressões leves serão punidas com advertência.
+
+Art. 23. A transgressão média sujeita o militar à prestação de serviço extraordinário.
+
+Art. 24. A transgressão grave será punida com a exclusão a bem da disciplina.`;
+
+  SearchService.search = async () => [
+    {
+      documentId: "rdpm-uuid-23",
+      chunkIndex: 2,
+      score: 0.98,
+      text: multiArticleChunkText,
+    },
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{ id: "rdpm-uuid-23", file_name: "rdpm.pdf" }],
+            error: null,
+          }),
+        }),
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  let llmCalled = false;
+  setChatImplementation(async () => {
+    llmCalled = true;
+    return "Resposta LLM";
+  });
+
+  try {
+    const res = await ChatService.chat("o que diz o artigo 23?");
+
+    assert.strictEqual(llmCalled, false, "LLM should not be called for literal article request");
+    assert.strictEqual(
+      res.answer,
+      "Art. 23. A transgressão média sujeita o militar à prestação de serviço extraordinário."
+    );
+    assert.ok(!res.answer.includes("Art. 22"));
+    assert.ok(!res.answer.includes("Art. 24"));
+    assert.strictEqual(res.sources.length, 1);
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
 });
 
 test("ChatService.chat - literal article request bypasses LLM call", async () => {

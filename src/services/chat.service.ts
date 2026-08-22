@@ -207,6 +207,49 @@ export function isLiteralArticleRequest(question: string): boolean {
 }
 
 /**
+ * Extracts requested article identifier/number from the user's question (e.g. "23", "23-A", "5").
+ */
+export function extractRequestedArticleNumber(question: string): string | null {
+  if (!question || typeof question !== "string") return null;
+  const match = question.match(/\b(?:Artigo|Art\.)\s*(\d+(?:-[A-Za-z\d]+)?\b[ºª]?|\d+)/i);
+  if (!match) return null;
+  // Clean ordinal suffix º or ª from number
+  return match[1].replace(/[ºª]/g, "").trim();
+}
+
+/**
+ * Extracts strictly the text of a target article from a larger text block containing multiple articles,
+ * starting at the target article header ("Art. 23", "Artigo 23") and stopping right before the next article header.
+ */
+export function extractArticleFromText(fullText: string, articleNum: string): string | null {
+  if (!fullText || !articleNum) return null;
+
+  // Header regex for target article (e.g., Art. 23, Artigo 23, Artigo 23º, Art. 23-A)
+  const escapedNum = escapeRegex(articleNum);
+  const startRegex = new RegExp(`\\b(?:Artigo|Art\\.)\\s*${escapedNum}\\b[ºª]?`, "i");
+  const startMatch = startRegex.exec(fullText);
+
+  if (!startMatch) return null;
+
+  const startIndex = startMatch.index;
+  const afterStartText = fullText.substring(startIndex + startMatch[0].length);
+
+  // Search for the next article header after the target article header
+  const nextArticleRegex = /\b(?:Artigo|Art\.)\s*\d+(?:-[A-Za-z\d]+)?\b[ºª]?/gi;
+  const nextMatch = nextArticleRegex.exec(afterStartText);
+
+  let extracted: string;
+  if (nextMatch) {
+    const endIndex = startIndex + startMatch[0].length + nextMatch.index;
+    extracted = fullText.substring(startIndex, endIndex).trim();
+  } else {
+    extracted = fullText.substring(startIndex).trim();
+  }
+
+  return extracted || null;
+}
+
+/**
  * Determines whether retrieved text represents a partial article excerpt.
  */
 export function isPartialArticleChunk(text: string): boolean {
@@ -594,8 +637,19 @@ ${globalResultsCount !== undefined ? globalResultsCount : "N/A"}`);
       const responseParts: string[] = [];
       const isMultiDoc = Object.keys(docGroupedTexts).length > 1;
 
+      const targetArticleNum = extractRequestedArticleNumber(question);
+
       for (const [docName, texts] of Object.entries(docGroupedTexts)) {
-        const exactText = texts.join("\n\n").trim();
+        const fullDocText = texts.join("\n\n").trim();
+        let exactText = fullDocText;
+
+        if (targetArticleNum) {
+          const extractedArticle = extractArticleFromText(fullDocText, targetArticleNum);
+          if (extractedArticle) {
+            exactText = extractedArticle;
+          }
+        }
+
         const header = isMultiDoc ? `**${docName}**\n` : "";
         const isPartial = isPartialArticleChunk(exactText);
 
