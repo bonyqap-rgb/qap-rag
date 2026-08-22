@@ -266,12 +266,12 @@ export function extractRequestedArticleText(text: string, articleNumber: number)
   let extracted: string;
   if (nextMatch) {
     const endIndex = startIndex + startMatch[0].length + nextMatch.index;
-    extracted = text.substring(startIndex, endIndex).trim();
+    extracted = text.substring(startIndex, endIndex);
   } else {
-    extracted = text.substring(startIndex).trim();
+    extracted = text.substring(startIndex);
   }
 
-  return extracted || null;
+  return extracted.length > 0 ? extracted : null;
 }
 
 /**
