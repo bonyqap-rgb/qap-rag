@@ -1,0 +1,194 @@
+name: one-time-fix
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply fix
+        run: node <<'NODE'
+const fs = require('fs');
+const p = 'src/services/chat.service.ts';
+let s = fs.readFileSync(p, 'utf8');
+if (!s.includes('export function extractRequestedArticleText')) {
+  const marker = '/**\n * Determines whether retrieved text represents a partial article excerpt.\n */';
+  const fn = String.raw`/**
+ * Extracts exactly the requested article from text containing multiple articles.
+ * The returned substring is taken directly from the original string without
+ * trimming, normalizing, or otherwise modifying its contents.
+ */
+export function extractRequestedArticleText(text: string, articleNumber: number): string | null {
+  if (typeof text !== "string" || !Number.isInteger(articleNumber) || articleNumber < 0) return null;
+
+  const number = String(articleNumber);
+  const headerRe = /^(?:[ \t]*)(?:(?:Artigo|Art\.?|Art)[ \t]+(\d+)(?:º|°)?|(\d+)(?:º|°))(?=[ \t]*(?:$|\S))/gim;
+  let requestedStart = -1;
+  let nextStart = text.length;
+  let match: RegExpExecArray | null;
+
+  while ((match = headerRe.exec(text)) !== null) {
+    const foundNumber = Number(match[1] ?? match[2]);
+    const leadingWhitespace = match[0].match(/^[ \t]*/)?.[0].length ?? 0;
+    const headerStart = match.index + leadingWhitespace;
+    if (foundNumber === articleNumber) {
+      requestedStart = headerStart;
+      headerRe.lastIndex = match.index + match[0].length;
+      break;
+    }
+  }
+
+  if (requestedStart < 0) return null;
+
+  while ((match = headerRe.exec(text)) !== null) {
+    const leadingWhitespace = match[0].match(/^[ \t]*/)?.[0].length ?? 0;
+    const candidateStart = match.index + leadingWhitespace;
+    if (candidateStart > requestedStart) {
+      nextStart = candidateStart;
+      break;
+    }
+  }
+
+  return text.slice(requestedStart, nextStart);
+}
+
+`;
+  if (!s.includes(marker)) throw new Error('Insertion marker not found');
+  s = s.replace(marker, fn + marker);
+}
+const bypass = '    // Direct Article Transcription Bypass (No LLM generation for literal requests)';
+const start = s.indexOf(bypass);
+if (start < 0) throw new Error('Bypass marker not found');
+const endMarker = '    const systemPrompt = PromptBuilderService.buildSystemPrompt();';
+const end = s.indexOf(endMarker, start);
+if (end < 0) throw new Error('Bypass end marker not found');
+const block = String.raw`    // Direct Article Transcription Bypass (No LLM generation for literal requests)
+    if (isLiteralArticleRequest(question)) {
+      const generationStartTime = performance.now();
+      const articleMatch = question.match(/(?:artigo|art\\.?)[ \\t]*(\\d+)|\\b(\\d+)(?:º|°)\\b/i);
+      const articleNumber = articleMatch ? Number(articleMatch[1] ?? articleMatch[2]) : null;
+
+      const docGroupedTexts: Record<string, string[]> = {};
+      for (const chunk of [...finalUsedChunks].sort((a, b) => a.chunkIndex - b.chunkIndex)) {
+        const docName = docMap.get(chunk.documentId) || chunk.documentName || "Desconhecido";
+        if (!docGroupedTexts[docName]) docGroupedTexts[docName] = [];
+        docGroupedTexts[docName].push(chunk.text);
+      }
+
+      const responseParts: string[] = [];
+      const isMultiDoc = Object.keys(docGroupedTexts).length > 1;
+
+      if (articleNumber === null) {
+        const overallDuration = performance.now() - overallStartTime;
+        return {
+          answer: "Não foi possível identificar o número do artigo solicitado na pergunta.",
+          sources: finalUsedChunks.map((c) => ({
+            documentId: c.documentId,
+            filename: docMap.get(c.documentId) || c.documentName || "Desconhecido",
+            chunkIndex: c.chunkIndex,
+            score: c.score !== undefined ? parseFloat(c.score.toFixed(4)) : 0,
+          })),
+          metadata: {
+            searchTime: `${"${"}searchTimeMs.toFixed(0)}ms`,
+            generationTime: "0ms",
+            totalTime: `${"${"}overallDuration.toFixed(0)}ms`,
+          },
+        };
+      }
+
+      for (const [docName, texts] of Object.entries(docGroupedTexts)) {
+        const combinedText = texts.join("\\n\\n");
+        const exactText = extractRequestedArticleText(combinedText, articleNumber);
+        const header = isMultiDoc ? `**${"${"}docName}**\\n` : "";
+        if (exactText === null) continue;
+        const outputText = exactText;
+        const isPartial = isPartialArticleChunk(outputText);
+        if (isPartial) {
+          responseParts.push(`${"${"}header}Transcrição parcial (trecho disponível na base de conhecimento):\\n\\n${"${"}outputText}`);
+        } else {
+          responseParts.push(`${"${"}header}${"${"}outputText}`);
+        }
+      }
+
+      if (responseParts.length === 0) {
+        const overallDuration = performance.now() - overallStartTime;
+        return {
+          answer: `Não encontrei o artigo ${"${"}articleNumber} na base de conhecimento.`,
+          sources: finalUsedChunks.map((c) => ({
+            documentId: c.documentId,
+            filename: docMap.get(c.documentId) || c.documentName || "Desconhecido",
+            chunkIndex: c.chunkIndex,
+            score: c.score !== undefined ? parseFloat(c.score.toFixed(4)) : 0,
+          })),
+          metadata: {
+            searchTime: `${"${"}searchTimeMs.toFixed(0)}ms`,
+            generationTime: "0ms",
+            totalTime: `${"${"}overallDuration.toFixed(0)}ms`,
+          },
+        };
+      }
+
+      const directAnswer = responseParts.join("\\n\\n---\\n\\n");
+      const generationTimeMs = performance.now() - generationStartTime;
+      const overallDuration = performance.now() - overallStartTime;
+      const sources: ChatSource[] = finalUsedChunks.map((c) => ({
+        documentId: c.documentId,
+        filename: docMap.get(c.documentId) || c.documentName || "Desconhecido",
+        chunkIndex: c.chunkIndex,
+        score: c.score !== undefined ? parseFloat(c.score.toFixed(4)) : 0,
+      }));
+      logger.info("Fluxo de Chat RAG concluído via transcrição direta (sem LLM)", {
+        searchTimeMs: parseFloat(searchTimeMs.toFixed(2)),
+        generationTimeMs: parseFloat(generationTimeMs.toFixed(2)),
+        totalTimeMs: parseFloat(overallDuration.toFixed(2)),
+        documentsCount: new Set(sources.map((s) => s.documentId)).size,
+        chunksCount: sources.length,
+      });
+      return {
+        answer: directAnswer,
+        sources,
+        metadata: {
+          searchTime: `${"${"}searchTimeMs.toFixed(0)}ms`,
+          generationTime: `${"${"}generationTimeMs.toFixed(0)}ms`,
+          totalTime: `${"${"}overallDuration.toFixed(0)}ms`,
+        },
+      };
+    }
+
+`;
+s = s.slice(0, start) + block + s.slice(end);
+fs.writeFileSync(p, s);
+NODE
+      - name: Add focused tests
+        run: node <<'NODE'
+const fs = require('fs');
+const p = 'src/services/chat.service.test.ts';
+let s = fs.readFileSync(p, 'utf8');
+if (!s.includes('extractRequestedArticleText')) {
+  s = s.replace('import { ChatService, isLiteralArticleRequest, isPartialArticleChunk } from "./chat.service.js";', 'import { ChatService, isLiteralArticleRequest, isPartialArticleChunk, extractRequestedArticleText } from "./chat.service.js";');
+  const marker = 'test("isLiteralArticleRequest and isPartialArticleChunk helper logic", () => {';
+  const test = `test("extractRequestedArticleText preserves exact source slice across multiple articles", () => {\n  const text = "Art. 22. Primeiro artigo.  \\n\\nArtigo 23. Texto do artigo 23.\\n  Parágrafo único.\\n\\n23º. Não deve ser confundido.\\n\\nArt. 24. Próximo artigo.";\n  const expected = "Artigo 23. Texto do artigo 23.\\n  Parágrafo único.\\n\\n";\n  assert.strictEqual(extractRequestedArticleText(text, 23), expected);\n  assert.strictEqual(extractRequestedArticleText(text, 22), "Art. 22. Primeiro artigo.  \\n\\n");\n  assert.strictEqual(extractRequestedArticleText(text, 24), "Art. 24. Próximo artigo.");\n  assert.strictEqual(extractRequestedArticleText(text, 99), null);\n});\n\n`;
+  if (s.includes(marker)) s = s.replace(marker, test + marker);
+  else s += '\n' + test;
+  fs.writeFileSync(p, s);
+}
+NODE
+      - name: Test and build
+        run: npm test && npm run build
+      - name: Commit result and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/one-time-fix.yml
+          git add src/services/chat.service.ts src/services/chat.service.test.ts .github/workflows/one-time-fix.yml
+          git commit -m "fix: extrair artigo literal preservando texto original"
+          git push origin main
