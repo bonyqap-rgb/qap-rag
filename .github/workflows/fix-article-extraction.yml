@@ -22,9 +22,8 @@ jobs:
           const fs = require('fs');
           const p = 'src/services/chat.service.ts';
           let s = fs.readFileSync(p, 'utf8');
-          const start = s.indexOf('export function extractRequestedArticleText');
-          const end = s.indexOf('/**\n * Determines whether retrieved text represents a partial article excerpt.', start);
-          if (start < 0 || end < 0) throw new Error('Função ou marcador não encontrado');
+          const marker = '/**\n * Determines whether retrieved text represents a partial article excerpt.\n */';
+          if (!s.includes(marker)) throw new Error('Marcador de inserção não encontrado');
           const fn = `/**
            * Extracts exactly the requested article from text containing multiple articles.
            * The returned value is a direct slice of the original string: no trim,
@@ -33,8 +32,9 @@ jobs:
           export function extractRequestedArticleText(text: string, articleNumber: number): string | null {
             if (typeof text !== 'string' || !Number.isInteger(articleNumber) || articleNumber < 0) return null;
 
-            // Article headers may occur inline in PDF-extracted text (not only at line starts).
-            // The first capture is the exact header; the following captures contain its number.
+            // PDF extraction may place article headers inline rather than at line starts.
+            // The separator is consumed only for detection; the returned slice starts
+            // exactly at the header and therefore preserves the original text byte-for-byte.
             const headerRe = /(^|[\\r\\n \\t])((?:Artigo|Art\\.?|Art)[ \\t]+(\\d+)(?:º|°)?|(?:(\\d+)(?:º|°)))(?=[ \\t]*(?:[.:;]|$))/gim;
             const headers: Array<{ start: number; number: number }> = [];
             let match: RegExpExecArray | null;
@@ -56,7 +56,14 @@ jobs:
           }
 
           `;
-          s = s.slice(0, start) + fn + s.slice(end);
+          const existingStart = s.indexOf('export function extractRequestedArticleText');
+          if (existingStart >= 0) {
+            const existingEnd = s.indexOf(marker, existingStart);
+            if (existingEnd < 0) throw new Error('Fim da função existente não encontrado');
+            s = s.slice(0, existingStart) + fn + s.slice(existingEnd);
+          } else {
+            s = s.replace(marker, fn + marker);
+          }
           fs.writeFileSync(p, s);
           NODE
       - name: Adicionar testes unitários
@@ -65,12 +72,34 @@ jobs:
           const fs = require('fs');
           const p = 'src/services/chat.service.test.ts';
           let s = fs.readFileSync(p, 'utf8');
-          if (!s.includes('extractRequestedArticleText')) {
-            s = s.replace(
-              'import { ChatService, isLiteralArticleRequest, isPartialArticleChunk } from "./chat.service.js";',
-              'import { ChatService, isLiteralArticleRequest, isPartialArticleChunk, extractRequestedArticleText } from "./chat.service.js";'
-            );
-            s += `\n\ndescribe("extractRequestedArticleText", () => {\n  test("isola artigo inline entre outros artigos", () => {\n    const text = "22. Se o fato é cometido sob coação irresistível. Art. 23. Não há crime quando o agente pratica o fato: I – em estado de necessidade; II – em legítima defesa. Art. 24. Considera-se em estado de necessidade quem pratica o fato para salvar de perigo atual.";\n    expect(extractRequestedArticleText(text, 23)).toBe("Art. 23. Não há crime quando o agente pratica o fato: I – em estado de necessidade; II – em legítima defesa. ");\n  });\n\n  test("preserva exatamente espaços e quebras de linha", () => {\n    const text = "Artigo 22. Anterior.\\n\\nArt. 23.  Texto original.  \\n\\n\\tParágrafo único.\\nArt. 24. Próximo.";\n    expect(extractRequestedArticleText(text, 23)).toBe("Art. 23.  Texto original.  \\n\\n\\tParágrafo único.\\n");\n  });\n\n  test("aceita Artigo, Art., Art, 23º e 23°", () => {\n    expect(extractRequestedArticleText("Artigo 23. Conteúdo. Artigo 24. Próximo.", 23)).toBe("Artigo 23. Conteúdo. ");\n    expect(extractRequestedArticleText("Art. 23. Conteúdo. Art. 24. Próximo.", 23)).toBe("Art. 23. Conteúdo. ");\n    expect(extractRequestedArticleText("Art 23. Conteúdo. Art 24. Próximo.", 23)).toBe("Art 23. Conteúdo. ");\n    expect(extractRequestedArticleText("22º. Anterior. 23º. Conteúdo. 24º. Próximo.", 23)).toBe("23º. Conteúdo. ");\n    expect(extractRequestedArticleText("22°. Anterior. 23°. Conteúdo. 24°. Próximo.", 23)).toBe("23°. Conteúdo. ");\n  });\n\n  test("retorna null quando o artigo não existe", () => {\n    expect(extractRequestedArticleText("Art. 22. Conteúdo. Art. 24. Próximo.", 23)).toBeNull();\n  });\n});\n`;
+          s = s.replace(
+            /import \{ ChatService, isLiteralArticleRequest, isPartialArticleChunk(?:, extractRequestedArticleText)? \} from "\.\/chat\.service\.js";/,
+            'import { ChatService, isLiteralArticleRequest, isPartialArticleChunk, extractRequestedArticleText } from "./chat.service.js";'
+          );
+          if (!s.includes('test("extractRequestedArticleText - preserves exact original slice"')) {
+            s += `\n\ntest("extractRequestedArticleText - preserves exact original slice", () => {
+  const text = "Artigo 22. Anterior.\\n\\nArt. 23.  Texto original.  \\n\\n\\tParágrafo único.\\nArt. 24. Próximo.";
+  assert.strictEqual(
+    extractRequestedArticleText(text, 23),
+    "Art. 23.  Texto original.  \\n\\n\\tParágrafo único.\\n"
+  );
+});
+
+test("extractRequestedArticleText - accepts all supported header forms", () => {
+  assert.strictEqual(extractRequestedArticleText("Artigo 23. Conteúdo. Artigo 24. Próximo.", 23), "Artigo 23. Conteúdo. ");
+  assert.strictEqual(extractRequestedArticleText("Art. 23. Conteúdo. Art. 24. Próximo.", 23), "Art. 23. Conteúdo. ");
+  assert.strictEqual(extractRequestedArticleText("Art 23. Conteúdo. Art 24. Próximo.", 23), "Art 23. Conteúdo. ");
+  assert.strictEqual(extractRequestedArticleText("22º. Anterior. 23º. Conteúdo. 24º. Próximo.", 23), "23º. Conteúdo. ");
+  assert.strictEqual(extractRequestedArticleText("22°. Anterior. 23°. Conteúdo. 24°. Próximo.", 23), "23°. Conteúdo. ");
+});
+
+test("extractRequestedArticleText - handles inline articles and final article", () => {
+  const text = "22. Anterior. Art. 23. Conteúdo do artigo. Art. 24. Próximo.";
+  assert.strictEqual(extractRequestedArticleText(text, 23), "Art. 23. Conteúdo do artigo. ");
+  assert.strictEqual(extractRequestedArticleText(text, 24), "Art. 24. Próximo.");
+  assert.strictEqual(extractRequestedArticleText(text, 99), null);
+});
+`;
             fs.writeFileSync(p, s);
           }
           NODE
