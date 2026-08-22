@@ -3,7 +3,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = "dummy_key";
 process.env.GROQ_API_KEY = "dummy_key";
 import { test } from "node:test";
 import assert from "node:assert";
-import { ChatService } from "./chat.service.js";
+import { ChatService, isLiteralArticleRequest, isPartialArticleChunk } from "./chat.service.js";
 import { SearchService } from "./search.service.js";
 import { ContextBuilderService } from "./context-builder.service.js";
 import { setChatImplementation, resetChatImplementation } from "../groq/chat.js";
@@ -259,6 +259,120 @@ test("ChatService.resolveDocuments - resolves 'RDPM' keyword correctly", async (
     assert.strictEqual(res[0].filename, "RDPM_regulamento.pdf");
   } finally {
     supabase.from = originalFrom;
+  }
+});
+
+test("isLiteralArticleRequest and isPartialArticleChunk helper logic", () => {
+  // Literal article requests
+  assert.strictEqual(isLiteralArticleRequest("qual é o conteúdo do artigo 10?"), true);
+  assert.strictEqual(isLiteralArticleRequest("qual o texto do artigo 12"), true);
+  assert.strictEqual(isLiteralArticleRequest("qual a redação do artigo 5º"), true);
+  assert.strictEqual(isLiteralArticleRequest("o que diz o artigo 30"), true);
+  assert.strictEqual(isLiteralArticleRequest("transcreva o artigo 15"), true);
+
+  // Explanation/summary/comparison requests should NOT be literal
+  assert.strictEqual(isLiteralArticleRequest("explique o artigo 10"), false);
+  assert.strictEqual(isLiteralArticleRequest("resuma o artigo 12"), false);
+  assert.strictEqual(isLiteralArticleRequest("interprete o artigo 5"), false);
+  assert.strictEqual(isLiteralArticleRequest("compare o artigo 10 com o artigo 20"), false);
+  assert.strictEqual(isLiteralArticleRequest("como funciona o recurso disciplinar?"), false);
+
+  // Partial chunk detection
+  assert.strictEqual(isPartialArticleChunk("Artigo 10º O recurso deve ser interposto em 5 dias."), false);
+  assert.strictEqual(isPartialArticleChunk("O recurso deve ser interposto em 5 dias."), true); // no article header
+  assert.strictEqual(isPartialArticleChunk("Artigo 10º O recurso deve ser interposto"), true); // no terminal punctuation
+});
+
+test("ChatService.chat - literal article request bypasses LLM call", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  SearchService.search = async () => [
+    {
+      documentId: "rdpm-uuid-10",
+      chunkIndex: 0,
+      score: 0.95,
+      text: "Artigo 10º O militar tem direito ao contraditório.",
+    },
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{ id: "rdpm-uuid-10", file_name: "rdpm.pdf" }],
+            error: null,
+          }),
+        }),
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  let llmCalled = false;
+  setChatImplementation(async () => {
+    llmCalled = true;
+    return "Resposta do LLM";
+  });
+
+  try {
+    const res = await ChatService.chat("qual é o conteúdo do artigo 10?");
+
+    assert.strictEqual(llmCalled, false, "LLM should NOT be called for literal article request");
+    assert.strictEqual(res.answer, "Artigo 10º O militar tem direito ao contraditório.");
+    assert.strictEqual(res.sources.length, 1);
+    assert.strictEqual(res.sources[0].documentId, "rdpm-uuid-10");
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});
+
+test("ChatService.chat - explanation query routes through LLM", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  SearchService.search = async () => [
+    {
+      documentId: "rdpm-uuid-10",
+      chunkIndex: 0,
+      score: 0.95,
+      text: "Artigo 10º O militar tem direito ao contraditório.",
+    },
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{ id: "rdpm-uuid-10", file_name: "rdpm.pdf" }],
+            error: null,
+          }),
+        }),
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  let llmCalled = false;
+  setChatImplementation(async () => {
+    llmCalled = true;
+    return "Explicação detalhada do artigo 10 sobre contraditório.";
+  });
+
+  try {
+    const res = await ChatService.chat("explique o artigo 10");
+
+    assert.strictEqual(llmCalled, true, "LLM should be called for explanation query");
+    assert.strictEqual(res.answer, "Explicação detalhada do artigo 10 sobre contraditório.");
+    assert.strictEqual(res.sources.length, 1);
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
   }
 });
 
