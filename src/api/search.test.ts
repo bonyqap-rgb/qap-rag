@@ -11,6 +11,7 @@ import { SearchService } from "../services/search.service.js";
 
 // Initialize test app
 const app = express();
+app.set("trust proxy", 1);
 app.use(express.json());
 app.use("/search", searchRouter);
 app.use(errorHandler);

@@ -14,6 +14,16 @@ export interface Document {
   processingStatus?: DocumentProcessingStatus;
   createdAt?: string;
   updatedAt?: string;
+  // Dynamic RAG-specific metadata columns:
+  status?: string;
+  totalChunks?: number;
+  total_chunks?: number;
+  totalEmbeddings?: number;
+  total_embeddings?: number;
+  extractedChars?: number;
+  extracted_chars?: number;
+  storagePath?: string;
+  storage_path?: string;
 }
 
 export interface DbDocument {

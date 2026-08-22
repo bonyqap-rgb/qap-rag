@@ -21,6 +21,7 @@ setEmbeddingImplementation(async (text) => {
 
 // Setup mock express server
 const app = express();
+app.set("trust proxy", 1);
 app.use(express.json());
 app.use("/documents", documentsRouter);
 app.use("/metrics", metricsRouter);
@@ -246,6 +247,10 @@ test("API POST /documents/reindex-all - rejects request with 401 if unauthorized
 });
 
 test("API POST /documents/reindex-all - reindexes all completed documents when authorized", async () => {
+  const { env } = await import("../config/env.js");
+  const originalServiceKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  env.SUPABASE_SERVICE_ROLE_KEY = "dummy_key";
+
   const originalList = documentService.listDocuments;
   const originalReindex = documentService.reindexDocument;
   const originalFrom = supabase.from;
@@ -322,5 +327,6 @@ test("API POST /documents/reindex-all - reindexes all completed documents when a
     documentService.listDocuments = originalList;
     documentService.reindexDocument = originalReindex;
     supabase.from = originalFrom;
+    env.SUPABASE_SERVICE_ROLE_KEY = originalServiceKey;
   }
 });

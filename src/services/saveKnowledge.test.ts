@@ -72,6 +72,7 @@ function createMockSupabase(options: {
 
 test("saveKnowledge - valid document", async () => {
   const originalFrom = supabase.from;
+  const originalRpc = supabase.rpc;
   const updatedDoc = { payload: null as any };
   const insertedChunks: any[] = [];
 
@@ -81,6 +82,14 @@ test("saveKnowledge - valid document", async () => {
     insertedChunks,
     countChunksResult: 2
   });
+
+  supabase.rpc = function (fnName: string, args: any) {
+    if (fnName === "update_document_chunks_transaction") {
+      insertedChunks.push(...args.p_chunks);
+      return Promise.resolve({ data: null, error: null }) as any;
+    }
+    return originalRpc.call(supabase, fnName as any, args);
+  } as any;
 
   try {
     const rawChunks = ["[PAGE:1] Primeiro chunk", "[PAGE:2] Segundo chunk"];
@@ -96,11 +105,13 @@ test("saveKnowledge - valid document", async () => {
     assert.strictEqual(insertedChunks.length, 2);
   } finally {
     supabase.from = originalFrom;
+    supabase.rpc = originalRpc;
   }
 });
 
 test("saveKnowledge - prioritized lookup by documentIdParam", async () => {
   const originalFrom = supabase.from;
+  const originalRpc = supabase.rpc;
   const updatedDoc = { payload: null as any };
   const insertedChunks: any[] = [];
   let lookupId: string | null = null;
@@ -164,6 +175,14 @@ test("saveKnowledge - prioritized lookup by documentIdParam", async () => {
 
   supabase.from = mockSupabaseWithTracking;
 
+  supabase.rpc = function (fnName: string, args: any) {
+    if (fnName === "update_document_chunks_transaction") {
+      insertedChunks.push(...args.p_chunks);
+      return Promise.resolve({ data: null, error: null }) as any;
+    }
+    return originalRpc.call(supabase, fnName as any, args);
+  } as any;
+
   try {
     const rawChunks = ["[PAGE:1] Primeiro chunk do PDF", "[PAGE:2] Segundo chunk do PDF"];
     const embeddings = [
@@ -178,6 +197,7 @@ test("saveKnowledge - prioritized lookup by documentIdParam", async () => {
     assert.strictEqual(updatedDoc.payload?.status, "INDEXADO");
   } finally {
     supabase.from = originalFrom;
+    supabase.rpc = originalRpc;
   }
 });
 
@@ -235,6 +255,7 @@ test("saveKnowledge - document with zero chunks", async () => {
 
 test("saveKnowledge - safe reindexing on existing INDEXAÇÃO_INVÁLIDA document", async () => {
   const originalFrom = supabase.from;
+  const originalRpc = supabase.rpc;
   const updatedDoc = { payload: null as any };
   const insertedChunks: any[] = [];
 
@@ -246,6 +267,14 @@ test("saveKnowledge - safe reindexing on existing INDEXAÇÃO_INVÁLIDA document
     insertedChunks,
     countChunksResult: 2
   });
+
+  supabase.rpc = function (fnName: string, args: any) {
+    if (fnName === "update_document_chunks_transaction") {
+      insertedChunks.push(...args.p_chunks);
+      return Promise.resolve({ data: null, error: null }) as any;
+    }
+    return originalRpc.call(supabase, fnName as any, args);
+  } as any;
 
   try {
     const rawChunks = ["[PAGE:1] Primeiro chunk do PDF", "[PAGE:2] Segundo chunk do PDF"];
@@ -262,5 +291,6 @@ test("saveKnowledge - safe reindexing on existing INDEXAÇÃO_INVÁLIDA document
     assert.strictEqual(insertedChunks.length, 2);
   } finally {
     supabase.from = originalFrom;
+    supabase.rpc = originalRpc;
   }
 });

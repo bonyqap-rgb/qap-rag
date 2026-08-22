@@ -4,7 +4,7 @@ import fs from "fs/promises";
 import path from "path";
 import { readPdf } from "../pdf/readPdf.js";
 import { createChunks } from "../chunker/createChunks.js";
-import { createEmbedding } from "../groq/embed.js";
+import { createEmbedding, createEmbeddingsForChunks } from "../groq/embed.js";
 import { saveKnowledge } from "../services/saveKnowledge.js";
 import { logger } from "../services/logger.service.js";
 import { indexingHistoryService } from "../services/indexing-history.service.js";
@@ -90,29 +90,35 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
 
       // Transition existing or pre-registered document status to INDEXAÇÃO_INVÁLIDA
       if (documentId) {
-        await supabase
+        const { error: failUpdateErr } = await supabase
           .from("knowledge_documents")
           .update({
             status: "INDEXAÇÃO_INVÁLIDA",
             updated_at: new Date().toISOString()
           })
           .eq("id", documentId);
+        if (failUpdateErr) {
+          logger.error(`[UPLOAD] Erro ao atualizar status de falha para o documento ${documentId}: ${failUpdateErr.message}`);
+        }
       } else {
         // Create document record with status INDEXAÇÃO_INVÁLIDA
-        await supabase
+        const { error: failInsertErr } = await supabase
           .from("knowledge_documents")
           .insert({
             file_name: fileName,
             status: "INDEXAÇÃO_INVÁLIDA",
             updated_at: new Date().toISOString()
           });
+        if (failInsertErr) {
+          logger.error(`[UPLOAD] Erro ao inserir registro de falha para o documento ${fileName}: ${failInsertErr.message}`);
+        }
       }
       throw new Error(`Falha ao salvar no Supabase Storage: ${storageErr.message || storageErr}`);
     }
 
     // 2. Gravar esse caminho em knowledge_documents.storage_path e marcar como PROCESSANDO
     if (documentId) {
-      await supabase
+      const { error: updateErr } = await supabase
         .from("knowledge_documents")
         .update({
           storage_path: savedPath,
@@ -125,6 +131,10 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
           updated_at: new Date().toISOString()
         })
         .eq("id", documentId);
+
+      if (updateErr) {
+        throw updateErr;
+      }
       logger.info(`[UPLOAD] Documento ${fileName} (ID: ${documentId}) atualizado com storage_path e marcado como PROCESSANDO.`);
     } else {
       const { data: newDoc, error: insertErr } = await supabase
@@ -166,20 +176,22 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
 
       console.log(`[UPLOAD] Gerando ${chunks.length} embeddings para o documento: ${req.file.originalname}`);
 
-      // Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
-      for (const chunk of chunks) {
-        embeddings.push(await createEmbedding(chunk));
-      }
+      // Geração de embeddings em lotes seguros com throttling para evitar HTTP 429 Rate Limits
+      const generatedEmbeddings = await createEmbeddingsForChunks(chunks);
+      embeddings.push(...generatedEmbeddings);
     } catch (processError: any) {
       // If error occurs during parsing, chunking or embedding generation, transition status to INDEXAÇÃO_INVÁLIDA
       if (documentId) {
-        await supabase
+        const { error: failProcessUpdateErr } = await supabase
           .from("knowledge_documents")
           .update({
             status: "INDEXAÇÃO_INVÁLIDA",
             updated_at: new Date().toISOString()
           })
           .eq("id", documentId);
+        if (failProcessUpdateErr) {
+          logger.error(`[UPLOAD] Erro ao atualizar status de falha de processamento para o documento ${documentId}: ${failProcessUpdateErr.message}`);
+        }
         logger.warn(`[UPLOAD] Documento ${fileName} (ID: ${documentId}) marcado como INDEXAÇÃO_INVÁLIDA devido a falha no processamento.`, {
           error: processError.message || String(processError)
         });
@@ -192,7 +204,8 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       req.file.originalname,
       chunks,
       embeddings,
-      documentId
+      documentId,
+      savedPath
     );
 
     const duration = parseFloat((performance.now() - start).toFixed(2));

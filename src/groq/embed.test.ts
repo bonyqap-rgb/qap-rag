@@ -56,6 +56,26 @@ test("Embedding Service - Voyage AI success and 1536 padding", async () => {
   }
 });
 
+test("Embedding Service - createEmbeddingsForChunks calls createEmbedding in batches", async () => {
+  const { createEmbeddingsForChunks } = await import("./embed.js");
+
+  // Set mock embedding implementation
+  setEmbeddingImplementation(async (text) => {
+    return Array(1536).fill(0.999);
+  });
+
+  try {
+    const chunks = ["chunk 1", "chunk 2", "chunk 3"];
+    const results = await createEmbeddingsForChunks(chunks);
+
+    assert.strictEqual(results.length, 3);
+    assert.strictEqual(results[0].length, 1536);
+    assert.strictEqual(results[0][0], 0.999);
+  } finally {
+    resetEmbeddingImplementation();
+  }
+});
+
 test("Embedding Service - Groq SDK success and 1536 padding", async () => {
   const originalVoyageKey = env.VOYAGE_API_KEY;
   const originalNomicKey = env.NOMIC_API_KEY;
