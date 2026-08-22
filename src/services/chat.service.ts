@@ -207,43 +207,68 @@ export function isLiteralArticleRequest(question: string): boolean {
 }
 
 /**
- * Extracts requested article identifier/number from the user's question (e.g. "23", "23-A", "5").
+ * Extracts requested article number from the user's question (e.g. 23 from "o que diz o artigo 23?").
  */
-export function extractRequestedArticleNumber(question: string): string | null {
+export function extractRequestedArticleNumber(question: string): number | null {
   if (!question || typeof question !== "string") return null;
-  const match = question.match(/\b(?:Artigo|Art\.)\s*(\d+(?:-[A-Za-z\d]+)?\b[ºª]?|\d+)/i);
+  const match = question.match(/\b(?:Artigo|Art\.?)\s*(\d+)/i);
   if (!match) return null;
-  // Clean ordinal suffix º or ª from number
-  return match[1].replace(/[ºª]/g, "").trim();
+  const num = parseInt(match[1], 10);
+  return isNaN(num) ? null : num;
 }
 
 /**
  * Extracts strictly the text of a target article from a larger text block containing multiple articles,
- * starting at the target article header ("Art. 23", "Artigo 23") and stopping right before the next article header.
+ * starting at the target article header ("Artigo 23", "Art. 23", "Art 23", "Artigo 23º/23°") and stopping
+ * right before the next article header ("Art. 24.", "Artigo 24", etc.).
+ * Returns null if the requested article is not present.
  */
-export function extractArticleFromText(fullText: string, articleNum: string): string | null {
-  if (!fullText || !articleNum) return null;
+export function extractRequestedArticleText(text: string, articleNumber: number): string | null {
+  if (!text || typeof text !== "string" || typeof articleNumber !== "number" || isNaN(articleNumber)) {
+    return null;
+  }
 
-  // Header regex for target article (e.g., Art. 23, Artigo 23, Artigo 23º, Art. 23-A)
-  const escapedNum = escapeRegex(articleNum);
-  const startRegex = new RegExp(`\\b(?:Artigo|Art\\.)\\s*${escapedNum}\\b[ºª]?`, "i");
-  const startMatch = startRegex.exec(fullText);
+  // Header regex for target article number (e.g. Artigo 23, Art. 23, Art 23, Artigo 23º, Artigo 23°, Art. 23.)
+  const startRegex = new RegExp(`(?:\\bArtigo|\\bArt\\.?)\\s*${articleNumber}(?:[º°]|\\b)`, "i");
+  const startMatch = startRegex.exec(text);
 
   if (!startMatch) return null;
 
   const startIndex = startMatch.index;
-  const afterStartText = fullText.substring(startIndex + startMatch[0].length);
+  const afterStartText = text.substring(startIndex + startMatch[0].length);
 
   // Search for the next article header after the target article header
-  const nextArticleRegex = /\b(?:Artigo|Art\.)\s*\d+(?:-[A-Za-z\d]+)?\b[ºª]?/gi;
-  const nextMatch = nextArticleRegex.exec(afterStartText);
+  // First attempt: match article header at a line break boundary with a different article number
+  const lineBreakArticleRegex = /(?:\r?\n|^)\s*(?:Artigo|Art\.?)\s*(\d+)(?:[º°.]|\b)/gi;
+  let nextMatch: RegExpExecArray | null = null;
+  let match: RegExpExecArray | null;
+
+  while ((match = lineBreakArticleRegex.exec(afterStartText)) !== null) {
+    const matchedNum = parseInt(match[1], 10);
+    if (matchedNum !== articleNumber) {
+      nextMatch = match;
+      break;
+    }
+  }
+
+  // Fallback attempt: if no line-break header was found, match any word boundary Artigo/Art. with different article number
+  if (!nextMatch) {
+    const wordBoundaryArticleRegex = /\b(?:Artigo|Art\.?)\s*(\d+)(?:[º°.]|\b)/gi;
+    while ((match = wordBoundaryArticleRegex.exec(afterStartText)) !== null) {
+      const matchedNum = parseInt(match[1], 10);
+      if (matchedNum !== articleNumber) {
+        nextMatch = match;
+        break;
+      }
+    }
+  }
 
   let extracted: string;
   if (nextMatch) {
     const endIndex = startIndex + startMatch[0].length + nextMatch.index;
-    extracted = fullText.substring(startIndex, endIndex).trim();
+    extracted = text.substring(startIndex, endIndex).trim();
   } else {
-    extracted = fullText.substring(startIndex).trim();
+    extracted = text.substring(startIndex).trim();
   }
 
   return extracted || null;
@@ -625,6 +650,8 @@ ${globalResultsCount !== undefined ? globalResultsCount : "N/A"}`);
     if (isLiteralArticleRequest(question)) {
       const generationStartTime = performance.now();
 
+      const articleNumber = extractRequestedArticleNumber(question);
+
       const docGroupedTexts: Record<string, string[]> = {};
       for (const chunk of finalUsedChunks) {
         const docName = docMap.get(chunk.documentId) || chunk.documentName || "Desconhecido";
@@ -637,27 +664,55 @@ ${globalResultsCount !== undefined ? globalResultsCount : "N/A"}`);
       const responseParts: string[] = [];
       const isMultiDoc = Object.keys(docGroupedTexts).length > 1;
 
-      const targetArticleNum = extractRequestedArticleNumber(question);
-
       for (const [docName, texts] of Object.entries(docGroupedTexts)) {
         const fullDocText = texts.join("\n\n").trim();
-        let exactText = fullDocText;
+        let exactText: string | null = fullDocText;
 
-        if (targetArticleNum) {
-          const extractedArticle = extractArticleFromText(fullDocText, targetArticleNum);
-          if (extractedArticle) {
-            exactText = extractedArticle;
+        if (articleNumber !== null) {
+          exactText = extractRequestedArticleText(fullDocText, articleNumber);
+        }
+
+        if (exactText) {
+          const header = isMultiDoc ? `**${docName}**\n` : "";
+          const isPartial = isPartialArticleChunk(exactText);
+
+          if (isPartial) {
+            responseParts.push(`${header}Transcrição parcial (trecho disponível na base de conhecimento):\n\n${exactText}`);
+          } else {
+            responseParts.push(`${header}${exactText}`);
           }
         }
+      }
 
-        const header = isMultiDoc ? `**${docName}**\n` : "";
-        const isPartial = isPartialArticleChunk(exactText);
+      // If a specific article number was requested but could not be extracted from retrieved chunks, trigger insufficiency
+      if (articleNumber !== null && responseParts.length === 0) {
+        const overallDuration = performance.now() - overallStartTime;
+        const motivoInsuficiencia = `O artigo ${articleNumber} não foi encontrado nos trechos recuperados da base de conhecimento. Pergunta: "${question}". Documento resolvido: ${resolvedDocNames || "Nenhum"}.`;
 
-        if (isPartial) {
-          responseParts.push(`${header}Transcrição parcial (trecho disponível na base de conhecimento):\n\n${exactText}`);
-        } else {
-          responseParts.push(`${header}${exactText}`);
-        }
+        logger.info("Insuficiência de contexto detectada", {
+          "documento resolvido": resolvedDocNames,
+          "document_id": resolvedDocIds,
+          resultsCount,
+          "motivo exato da insuficiência": motivoInsuficiencia
+        });
+
+        logger.info("Fluxo de Chat concluído com contexto vazio (artigo não encontrado)", {
+          searchTimeMs: parseFloat(searchTimeMs.toFixed(2)),
+          generationTimeMs: 0,
+          totalTimeMs: parseFloat(overallDuration.toFixed(2)),
+          documentsCount: 0,
+          chunksCount: 0,
+        });
+
+        return {
+          answer: `Não encontrei essa informação na base de conhecimento. Causa detalhada: ${motivoInsuficiencia}`,
+          sources: [],
+          metadata: {
+            searchTime: `${searchTimeMs.toFixed(0)}ms`,
+            generationTime: "0ms",
+            totalTime: `${overallDuration.toFixed(0)}ms`,
+          },
+        };
       }
 
       const directAnswer = responseParts.join("\n\n---\n\n");

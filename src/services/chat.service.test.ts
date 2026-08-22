@@ -3,7 +3,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = "dummy_key";
 process.env.GROQ_API_KEY = "dummy_key";
 import { test } from "node:test";
 import assert from "node:assert";
-import { ChatService, isLiteralArticleRequest, isPartialArticleChunk, extractRequestedArticleNumber, extractArticleFromText } from "./chat.service.js";
+import { ChatService, isLiteralArticleRequest, isPartialArticleChunk, extractRequestedArticleNumber, extractRequestedArticleText } from "./chat.service.js";
 import { SearchService } from "./search.service.js";
 import { ContextBuilderService } from "./context-builder.service.js";
 import { setChatImplementation, resetChatImplementation } from "../groq/chat.js";
@@ -283,33 +283,69 @@ test("isLiteralArticleRequest and isPartialArticleChunk helper logic", () => {
   assert.strictEqual(isPartialArticleChunk("Artigo 10º O recurso deve ser interposto"), true); // no terminal punctuation
 });
 
-test("extractRequestedArticleNumber and extractArticleFromText unit tests", () => {
-  assert.strictEqual(extractRequestedArticleNumber("o que diz o artigo 23?"), "23");
-  assert.strictEqual(extractRequestedArticleNumber("qual o texto do Art. 105-Aº"), "105-A");
+test("extractRequestedArticleNumber and extractRequestedArticleText unit tests", () => {
+  assert.strictEqual(extractRequestedArticleNumber("o que diz o artigo 23?"), 23);
+  assert.strictEqual(extractRequestedArticleNumber("qual o texto do Art. 105"), 105);
   assert.strictEqual(extractRequestedArticleNumber("como funciona o recurso?"), null);
 
-  const chunkWithMultipleArticles = `Art. 22. As transgressões leves serão punidas com advertência.
+  const chunkWithMultipleArticles = `Artigo 22. As transgressões leves serão punidas com advertência.
 
-Art. 23. A transgressão média sujeita o militar à prestação de serviço extraordinário.
+Artigo 23. A transgressão média sujeita o militar à prestação de serviço extraordinário.
 
-Art. 24. A transgressão grave será punida com a exclusão a bem da disciplina.`;
+Artigo 24. A transgressão grave será punida com a exclusão a bem da disciplina.`;
 
-  const extracted = extractArticleFromText(chunkWithMultipleArticles, "23");
+  // Test extraction of middle article 23
+  const extracted23 = extractRequestedArticleText(chunkWithMultipleArticles, 23);
   assert.strictEqual(
-    extracted,
-    "Art. 23. A transgressão média sujeita o militar à prestação de serviço extraordinário."
+    extracted23,
+    "Artigo 23. A transgressão média sujeita o militar à prestação de serviço extraordinário."
   );
+
+  // Test extraction of first article 22
+  const extracted22 = extractRequestedArticleText(chunkWithMultipleArticles, 22);
+  assert.strictEqual(
+    extracted22,
+    "Artigo 22. As transgressões leves serão punidas com advertência."
+  );
+
+  // Test extraction of last article 24
+  const extracted24 = extractRequestedArticleText(chunkWithMultipleArticles, 24);
+  assert.strictEqual(
+    extracted24,
+    "Artigo 24. A transgressão grave será punida com a exclusão a bem da disciplina."
+  );
+
+  // Test headers variants: "Art. 23.", "Art 23", "Artigo 23º", "Artigo 23°"
+  assert.strictEqual(
+    extractRequestedArticleText("Art. 23. Texto do artigo 23.\nArt. 24. Texto do 24.", 23),
+    "Art. 23. Texto do artigo 23."
+  );
+  assert.strictEqual(
+    extractRequestedArticleText("Art 23 Texto do artigo 23.\nArt 24 Texto do 24.", 23),
+    "Art 23 Texto do artigo 23."
+  );
+  assert.strictEqual(
+    extractRequestedArticleText("Artigo 23º Texto do artigo 23.\nArtigo 24º Texto do 24.", 23),
+    "Artigo 23º Texto do artigo 23."
+  );
+  assert.strictEqual(
+    extractRequestedArticleText("Artigo 23° Texto do artigo 23.\nArtigo 24° Texto do 24.", 23),
+    "Artigo 23° Texto do artigo 23."
+  );
+
+  // Test non-existent article returns null
+  assert.strictEqual(extractRequestedArticleText(chunkWithMultipleArticles, 99), null);
 });
 
 test("ChatService.chat - literal query for specific article in multi-article chunk returns only requested article", async () => {
   const originalSearch = SearchService.search;
   const originalFrom = supabase.from;
 
-  const multiArticleChunkText = `Art. 22. As transgressões leves serão punidas com advertência.
+  const multiArticleChunkText = `Artigo 22. As transgressões leves serão punidas com advertência.
 
-Art. 23. A transgressão média sujeita o militar à prestação de serviço extraordinário.
+Artigo 23. A transgressão média sujeita o militar à prestação de serviço extraordinário.
 
-Art. 24. A transgressão grave será punida com a exclusão a bem da disciplina.`;
+Artigo 24. A transgressão grave será punida com a exclusão a bem da disciplina.`;
 
   SearchService.search = async () => [
     {
@@ -346,11 +382,58 @@ Art. 24. A transgressão grave será punida com a exclusão a bem da disciplina.
     assert.strictEqual(llmCalled, false, "LLM should not be called for literal article request");
     assert.strictEqual(
       res.answer,
-      "Art. 23. A transgressão média sujeita o militar à prestação de serviço extraordinário."
+      "Artigo 23. A transgressão média sujeita o militar à prestação de serviço extraordinário."
     );
-    assert.ok(!res.answer.includes("Art. 22"));
-    assert.ok(!res.answer.includes("Art. 24"));
+    assert.ok(!res.answer.includes("Artigo 22"));
+    assert.ok(!res.answer.includes("Artigo 24"));
     assert.strictEqual(res.sources.length, 1);
+  } finally {
+    SearchService.search = originalSearch;
+    supabase.from = originalFrom;
+    resetChatImplementation();
+  }
+});
+
+test("ChatService.chat - literal query for non-existent article returns insufficiency response without LLM call", async () => {
+  const originalSearch = SearchService.search;
+  const originalFrom = supabase.from;
+
+  SearchService.search = async () => [
+    {
+      documentId: "rdpm-uuid-23",
+      chunkIndex: 2,
+      score: 0.98,
+      text: "Artigo 22. As transgressões leves serão punidas com advertência.",
+    },
+  ];
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_documents") {
+      return {
+        select: () => ({
+          in: () => Promise.resolve({
+            data: [{ id: "rdpm-uuid-23", file_name: "rdpm.pdf" }],
+            error: null,
+          }),
+        }),
+      } as any;
+    }
+    return originalFrom.call(supabase, table);
+  };
+
+  let llmCalled = false;
+  setChatImplementation(async () => {
+    llmCalled = true;
+    return "Resposta LLM";
+  });
+
+  try {
+    const res = await ChatService.chat("o que diz o artigo 99?");
+
+    assert.strictEqual(llmCalled, false, "LLM should not be called even if requested article is not in chunks");
+    assert.ok(res.answer.startsWith("Não encontrei essa informação na base de conhecimento."));
+    assert.ok(res.answer.includes("artigo 99 não foi encontrado"));
+    assert.strictEqual(res.sources.length, 0);
   } finally {
     SearchService.search = originalSearch;
     supabase.from = originalFrom;
