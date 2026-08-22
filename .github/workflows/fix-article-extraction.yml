@@ -1,0 +1,89 @@
+name: fix-article-extraction
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Corrigir extractRequestedArticleText
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const p = 'src/services/chat.service.ts';
+          let s = fs.readFileSync(p, 'utf8');
+          const start = s.indexOf('export function extractRequestedArticleText');
+          const end = s.indexOf('/**\n * Determines whether retrieved text represents a partial article excerpt.', start);
+          if (start < 0 || end < 0) throw new Error('Função ou marcador não encontrado');
+          const fn = `/**
+           * Extracts exactly the requested article from text containing multiple articles.
+           * The returned value is a direct slice of the original string: no trim,
+           * normalization, replacement, or other text transformation is performed.
+           */
+          export function extractRequestedArticleText(text: string, articleNumber: number): string | null {
+            if (typeof text !== 'string' || !Number.isInteger(articleNumber) || articleNumber < 0) return null;
+
+            // Article headers may occur inline in PDF-extracted text (not only at line starts).
+            // The first capture is the exact header; the following captures contain its number.
+            const headerRe = /(^|[\\r\\n \\t])((?:Artigo|Art\\.?|Art)[ \\t]+(\\d+)(?:º|°)?|(?:(\\d+)(?:º|°)))(?=[ \\t]*(?:[.:;]|$))/gim;
+            const headers: Array<{ start: number; number: number }> = [];
+            let match: RegExpExecArray | null;
+
+            while ((match = headerRe.exec(text)) !== null) {
+              const headerStart = match.index + match[1].length;
+              const foundNumber = Number(match[3] ?? match[4]);
+              if (Number.isInteger(foundNumber)) {
+                headers.push({ start: headerStart, number: foundNumber });
+              }
+            }
+
+            const requested = headers.find((h) => h.number === articleNumber);
+            if (!requested) return null;
+
+            const next = headers.find((h) => h.start > requested.start);
+            const end = next ? next.start : text.length;
+            return text.slice(requested.start, end);
+          }
+
+          `;
+          s = s.slice(0, start) + fn + s.slice(end);
+          fs.writeFileSync(p, s);
+          NODE
+      - name: Adicionar testes unitários
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const p = 'src/services/chat.service.test.ts';
+          let s = fs.readFileSync(p, 'utf8');
+          if (!s.includes('extractRequestedArticleText')) {
+            s = s.replace(
+              'import { ChatService, isLiteralArticleRequest, isPartialArticleChunk } from "./chat.service.js";',
+              'import { ChatService, isLiteralArticleRequest, isPartialArticleChunk, extractRequestedArticleText } from "./chat.service.js";'
+            );
+            s += `\n\ndescribe("extractRequestedArticleText", () => {\n  test("isola artigo inline entre outros artigos", () => {\n    const text = "22. Se o fato é cometido sob coação irresistível. Art. 23. Não há crime quando o agente pratica o fato: I – em estado de necessidade; II – em legítima defesa. Art. 24. Considera-se em estado de necessidade quem pratica o fato para salvar de perigo atual.";\n    expect(extractRequestedArticleText(text, 23)).toBe("Art. 23. Não há crime quando o agente pratica o fato: I – em estado de necessidade; II – em legítima defesa. ");\n  });\n\n  test("preserva exatamente espaços e quebras de linha", () => {\n    const text = "Artigo 22. Anterior.\\n\\nArt. 23.  Texto original.  \\n\\n\\tParágrafo único.\\nArt. 24. Próximo.";\n    expect(extractRequestedArticleText(text, 23)).toBe("Art. 23.  Texto original.  \\n\\n\\tParágrafo único.\\n");\n  });\n\n  test("aceita Artigo, Art., Art, 23º e 23°", () => {\n    expect(extractRequestedArticleText("Artigo 23. Conteúdo. Artigo 24. Próximo.", 23)).toBe("Artigo 23. Conteúdo. ");\n    expect(extractRequestedArticleText("Art. 23. Conteúdo. Art. 24. Próximo.", 23)).toBe("Art. 23. Conteúdo. ");\n    expect(extractRequestedArticleText("Art 23. Conteúdo. Art 24. Próximo.", 23)).toBe("Art 23. Conteúdo. ");\n    expect(extractRequestedArticleText("22º. Anterior. 23º. Conteúdo. 24º. Próximo.", 23)).toBe("23º. Conteúdo. ");\n    expect(extractRequestedArticleText("22°. Anterior. 23°. Conteúdo. 24°. Próximo.", 23)).toBe("23°. Conteúdo. ");\n  });\n\n  test("retorna null quando o artigo não existe", () => {\n    expect(extractRequestedArticleText("Art. 22. Conteúdo. Art. 24. Próximo.", 23)).toBeNull();\n  });\n});\n`;
+            fs.writeFileSync(p, s);
+          }
+          NODE
+      - name: Validar testes e build
+        run: |
+          npm ci
+          npm test -- --run
+          npm run build
+      - name: Commitar e encerrar correção
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/fix-article-extraction.yml
+          git add src/services/chat.service.ts src/services/chat.service.test.ts .github/workflows/fix-article-extraction.yml
+          git diff --cached --quiet || git commit -m "fix: isolar artigo literal em texto inline"
+          git push origin main
