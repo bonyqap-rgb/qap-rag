@@ -22,19 +22,17 @@ jobs:
           const fs = require('fs');
           const p = 'src/services/chat.service.ts';
           let s = fs.readFileSync(p, 'utf8');
-          const marker = '/**\n * Determines whether retrieved text represents a partial article excerpt.\n */';
-          if (!s.includes(marker)) throw new Error('Marcador de inserção não encontrado');
+          const marker = 'export function isPartialArticleChunk';
+          const markerIndex = s.indexOf(marker);
+          if (markerIndex < 0) throw new Error('Ponto de inserção não encontrado');
           const fn = `/**
            * Extracts exactly the requested article from text containing multiple articles.
-           * The returned value is a direct slice of the original string: no trim,
-           * normalization, replacement, or other text transformation is performed.
+           * Returns a direct slice of the original string: no trim, normalization,
+           * replacement, paraphrase, or LLM call is performed.
            */
           export function extractRequestedArticleText(text: string, articleNumber: number): string | null {
             if (typeof text !== 'string' || !Number.isInteger(articleNumber) || articleNumber < 0) return null;
 
-            // PDF extraction may place article headers inline rather than at line starts.
-            // The separator is consumed only for detection; the returned slice starts
-            // exactly at the header and therefore preserves the original text byte-for-byte.
             const headerRe = /(^|[\\r\\n \\t])((?:Artigo|Art\\.?|Art)[ \\t]+(\\d+)(?:º|°)?|(?:(\\d+)(?:º|°)))(?=[ \\t]*(?:[.:;]|$))/gim;
             const headers: Array<{ start: number; number: number }> = [];
             let match: RegExpExecArray | null;
@@ -42,27 +40,22 @@ jobs:
             while ((match = headerRe.exec(text)) !== null) {
               const headerStart = match.index + match[1].length;
               const foundNumber = Number(match[3] ?? match[4]);
-              if (Number.isInteger(foundNumber)) {
-                headers.push({ start: headerStart, number: foundNumber });
-              }
+              if (Number.isInteger(foundNumber)) headers.push({ start: headerStart, number: foundNumber });
             }
 
             const requested = headers.find((h) => h.number === articleNumber);
             if (!requested) return null;
 
             const next = headers.find((h) => h.start > requested.start);
-            const end = next ? next.start : text.length;
-            return text.slice(requested.start, end);
+            return text.slice(requested.start, next ? next.start : text.length);
           }
 
           `;
           const existingStart = s.indexOf('export function extractRequestedArticleText');
           if (existingStart >= 0) {
-            const existingEnd = s.indexOf(marker, existingStart);
-            if (existingEnd < 0) throw new Error('Fim da função existente não encontrado');
-            s = s.slice(0, existingStart) + fn + s.slice(existingEnd);
+            s = s.slice(0, existingStart) + fn + s.slice(markerIndex);
           } else {
-            s = s.replace(marker, fn + marker);
+            s = s.slice(0, markerIndex) + fn + s.slice(markerIndex);
           }
           fs.writeFileSync(p, s);
           NODE
@@ -79,10 +72,7 @@ jobs:
           if (!s.includes('test("extractRequestedArticleText - preserves exact original slice"')) {
             s += `\n\ntest("extractRequestedArticleText - preserves exact original slice", () => {
   const text = "Artigo 22. Anterior.\\n\\nArt. 23.  Texto original.  \\n\\n\\tParágrafo único.\\nArt. 24. Próximo.";
-  assert.strictEqual(
-    extractRequestedArticleText(text, 23),
-    "Art. 23.  Texto original.  \\n\\n\\tParágrafo único.\\n"
-  );
+  assert.strictEqual(extractRequestedArticleText(text, 23), "Art. 23.  Texto original.  \\n\\n\\tParágrafo único.\\n");
 });
 
 test("extractRequestedArticleText - accepts all supported header forms", () => {
