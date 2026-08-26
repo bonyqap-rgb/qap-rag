@@ -1,0 +1,20 @@
+name: inspect-chat
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect
+        run: |
+          echo '--- CHAT SERVICE MARKERS ---'
+          grep -nE 'finalUsedChunks|chatWithContextConfigurable|PromptBuilderService|generationStart|return \{|const answer|answer:' src/services/chat.service.ts || true
+          echo '--- CONTEXT AROUND GROQ ---'
+          n=$(grep -n 'chatWithContextConfigurable' src/services/chat.service.ts | tail -1 | cut -d: -f1)
+          if [ -n "$n" ]; then start=$((n-80)); [ $start -lt 1 ] && start=1; end=$((n+80)); nl -ba src/services/chat.service.ts | sed -n "${start},${end}p"; fi
