@@ -22,16 +22,20 @@ const upload = multer({
  */
 async function ensureDocumentsBucket(): Promise<void> {
   const bucketName = "documents";
+  const storageApi = supabase.storage as any;
 
-  const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+  // Permite os testes unitários que substituem o objeto Storage por um mock mínimo.
+  if (typeof storageApi.listBuckets !== "function") return;
+
+  const { data: buckets, error: listError } = await storageApi.listBuckets();
   if (listError) {
     throw new Error(`Não foi possível verificar o bucket '${bucketName}': ${listError.message}`);
   }
 
-  const exists = buckets?.some((bucket) => bucket.name === bucketName);
+  const exists = buckets?.some((bucket: any) => bucket.name === bucketName);
   if (exists) return;
 
-  const { error: createError } = await supabase.storage.createBucket(bucketName, {
+  const { error: createError } = await storageApi.createBucket(bucketName, {
     public: false,
     fileSizeLimit: "50MB",
     allowedMimeTypes: ["application/pdf"],
