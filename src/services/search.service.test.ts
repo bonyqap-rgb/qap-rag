@@ -4,7 +4,11 @@ process.env.GROQ_API_KEY = "dummy_key";
 import { test, mock } from "node:test";
 import assert from "node:assert";
 import { supabase } from "../config/supabase.js";
-import { SearchService } from "./search.service.js";
+import {
+  SearchService,
+  extractRequestedArticleNumber,
+  isChunkMatchingArticle,
+} from "./search.service.js";
 import { ContextBuilderService } from "./context-builder.service.js";
 
 import { setEmbeddingImplementation, resetEmbeddingImplementation } from "../groq/embed.js";
@@ -100,6 +104,121 @@ test("SearchService - search successfully with results sorted by score", async (
     assert.strictEqual(results[0].text, "Este é o segundo trecho.");
     assert.ok(Math.abs(results[1].score - expectedScore1) < 1e-7);
     assert.strictEqual(results[1].text, "Este é o primeiro trecho.");
+  } finally {
+    supabase.rpc = originalRpc;
+  }
+});
+
+test("Literal Article Matching - helper logic extractRequestedArticleNumber and isChunkMatchingArticle", () => {
+  // extractRequestedArticleNumber
+  assert.strictEqual(extractRequestedArticleNumber("Qual é o texto do artigo 1º do Código Penal Militar?"), "1");
+  assert.strictEqual(extractRequestedArticleNumber("Qual o conteúdo do Artigo 9º do CPM?"), "9");
+  assert.strictEqual(extractRequestedArticleNumber("O que diz o Art. 10?"), "10");
+  assert.strictEqual(extractRequestedArticleNumber("Transcreva o art 11"), "11");
+  assert.strictEqual(extractRequestedArticleNumber("Como funciona o processo disciplinar?"), null);
+
+  // artigo 1 não casar com artigo 10
+  assert.strictEqual(
+    isChunkMatchingArticle("[PAGE:2] Art. 10. Consideram-se crimes militares...", "1"),
+    false
+  );
+  assert.strictEqual(
+    isChunkMatchingArticle("[PAGE:2] Artigo 10º Consideram-se crimes...", "1"),
+    false
+  );
+
+  // artigo 9 casar com artigo 9
+  assert.strictEqual(
+    isChunkMatchingArticle("[PAGE:3] Artigo 9º Consideram-se crimes militares...", "9"),
+    true
+  );
+  assert.strictEqual(
+    isChunkMatchingArticle("[PAGE:3] Art. 9. Consideram-se crimes...", "9"),
+    true
+  );
+
+  // artigo 1 casar com artigo 1
+  assert.strictEqual(
+    isChunkMatchingArticle("[PAGE:1] Art. 1º O Código Penal Militar divide-se em...", "1"),
+    true
+  );
+});
+
+test("SearchService - Literal Article Request: artigo 1 query prioritizes artigo 1 over artigo 9", async () => {
+  const originalRpc = supabase.rpc;
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      return {
+        data: [
+          {
+            document_id: "doc-cpm",
+            chunk_index: 8,
+            content: "[METADATA:{\"sourceDocument\":\"cpm.pdf\"}]\n[PAGE:3] Artigo 9º Consideram-se crimes militares em tempo de paz...",
+            similarity: 0.90, // higher initial vector score
+          },
+          {
+            document_id: "doc-cpm",
+            chunk_index: 0,
+            content: "[METADATA:{\"sourceDocument\":\"cpm.pdf\"}]\n[PAGE:1] Art. 1º O Código Penal Militar divide-se em Parte Geral e Parte Especial.",
+            similarity: 0.80, // lower initial score
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    if (fnName === "match_knowledge_chunks_lexical") {
+      return { data: [], error: null } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Qual é o texto do artigo 1º do Código Penal Militar?", 5, 0.15);
+
+    assert.ok(results.length >= 1);
+    // Artigo 1 MUST be prioritized first and not return Artigo 9 first
+    assert.ok(results[0].text.includes("Art. 1º"));
+    assert.strictEqual(results[0].text.includes("Artigo 9º"), false);
+  } finally {
+    supabase.rpc = originalRpc;
+  }
+});
+
+test("SearchService - Explanatory Request uses normal flow without literal article reordering", async () => {
+  const originalRpc = supabase.rpc;
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      return {
+        data: [
+          {
+            document_id: "doc-explanation",
+            chunk_index: 5,
+            content: "[METADATA:{\"sourceDocument\":\"comentarios.pdf\"}]\nArtigo 1. Explicação sobre a aplicação das penas e crimes militares.",
+            similarity: 0.88,
+          },
+          {
+            document_id: "doc-cpm",
+            chunk_index: 10,
+            content: "[METADATA:{\"sourceDocument\":\"cpm.pdf\"}]\n[PAGE:2] Art. 10. Consideram-se crimes militares...",
+            similarity: 0.70,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    if (fnName === "match_knowledge_chunks_lexical") {
+      return { data: [], error: null } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  try {
+    // "Explique o artigo 10" is an explanatory request (isLiteralArticleRequest = false)
+    const results = await SearchService.search("Explique o artigo 10", 5, 0.15);
+
+    assert.ok(results.length >= 1);
+    // Normal ranking based on score is preserved (doc-explanation ranks first)
+    assert.strictEqual(results[0].documentId, "doc-explanation");
   } finally {
     supabase.rpc = originalRpc;
   }

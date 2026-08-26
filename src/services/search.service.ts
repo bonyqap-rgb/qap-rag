@@ -3,6 +3,46 @@ import { env } from "../config/env.js";
 import { createEmbedding } from "../groq/embed.js";
 import { logger } from "./logger.service.js";
 import { metricsService } from "./metrics.service.js";
+import { isLiteralArticleRequest } from "./chat.service.js";
+
+/**
+ * Extracts the requested article number from a user query if present.
+ * Examples:
+ * - "Qual é o texto do artigo 1º do Código Penal Militar?" -> "1"
+ * - "Qual o conteúdo do Artigo 9º do CPM?" -> "9"
+ * - "O que diz o Art. 10?" -> "10"
+ * - "Transcreva o art 11" -> "11"
+ */
+export function extractRequestedArticleNumber(queryText: string): string | null {
+  if (!queryText || typeof queryText !== "string") return null;
+
+  const match = queryText.match(/(?:artigo|art\.?)\s*(\d+(?:-[a-z\d]+)?)(?:[º°o]|\b)/i);
+  if (match && match[1]) {
+    return match[1];
+  }
+  return null;
+}
+
+/**
+ * Checks if a chunk's text matches the exact requested article number.
+ * Ensures strict boundary checking so that "Art. 1º" does NOT match "Art. 10", "Art. 11", etc.
+ * Properly considers the optional "[PAGE:x]" prefix existing in chunks.
+ */
+export function isChunkMatchingArticle(
+  chunkText: string,
+  requestedArticleNumber: string
+): boolean {
+  if (!chunkText || typeof chunkText !== "string" || !requestedArticleNumber) return false;
+
+  const escapedN = requestedArticleNumber.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+
+  const pattern = new RegExp(
+    `(?:^|\\[PAGE:\\d+\\]\\s*|\\b)(?:Artigo|Art\\.?)\\s*${escapedN}(?:[º°o]|\\b)(?!\\d)`,
+    "i"
+  );
+
+  return pattern.test(chunkText);
+}
 
 // Configurable constants for Hybrid Search (PR 4)
 export const HYBRID_VECTOR_WEIGHT = 0.7;
@@ -736,7 +776,7 @@ export class SearchService {
     // 6. Greedy Document Diversity Re-ranking using DIVERSITY_PENALTY_FACTOR
     const rrfDuration = performance.now() - rrfStart;
     const diversityStart = performance.now();
-    const dynamicResults: SearchResultItem[] = [];
+    let dynamicResults: SearchResultItem[] = [];
     const docCounts = new Map<string, number>();
 
     // Sort by composite final score descending first
@@ -763,6 +803,23 @@ export class SearchService {
 
     // Sort results by score descending again
     dynamicResults.sort((a, b) => b.score - a.score);
+
+    // Literal Article Request Prioritization
+    if (isLiteralArticleRequest(queryText)) {
+      const requestedArticleNumber = extractRequestedArticleNumber(queryText);
+      if (requestedArticleNumber) {
+        const matchingChunks = dynamicResults.filter((r) =>
+          isChunkMatchingArticle(r.text, requestedArticleNumber)
+        );
+        const nonMatchingChunks = dynamicResults.filter(
+          (r) => !isChunkMatchingArticle(r.text, requestedArticleNumber)
+        );
+
+        if (matchingChunks.length > 0) {
+          dynamicResults = [...matchingChunks, ...nonMatchingChunks];
+        }
+      }
+    }
 
     // Limit output results strictly to topK
     const uniqueResults = dynamicResults.slice(0, topK);
