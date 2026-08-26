@@ -16,6 +16,34 @@ const upload = multer({
   storage: multer.memoryStorage(),
 });
 
+/**
+ * Garante que o bucket persistente de documentos exista antes do upload.
+ * Isso evita o erro 500 quando o ambiente Supabase foi criado sem o bucket.
+ */
+async function ensureDocumentsBucket(): Promise<void> {
+  const bucketName = "documents";
+
+  const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+  if (listError) {
+    throw new Error(`Não foi possível verificar o bucket '${bucketName}': ${listError.message}`);
+  }
+
+  const exists = buckets?.some((bucket) => bucket.name === bucketName);
+  if (exists) return;
+
+  const { error: createError } = await supabase.storage.createBucket(bucketName, {
+    public: false,
+    fileSizeLimit: "50MB",
+    allowedMimeTypes: ["application/pdf"],
+  });
+
+  if (createError && !/already exists|duplicate/i.test(createError.message || "")) {
+    throw new Error(`Não foi possível criar o bucket '${bucketName}': ${createError.message}`);
+  }
+
+  logger.info(`[UPLOAD] Bucket Supabase '${bucketName}' verificado/criado com sucesso.`);
+}
+
 router.post("/", upload.single("file"), async (req: Request, res: Response, next: NextFunction) => {
   const start = performance.now();
   const requestId = req.headers["x-request-id"] as string;
@@ -37,7 +65,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       });
     }
 
-    fileName = req.file.originalname;
+    fileName = path.basename(req.file.originalname);
 
     logger.info("[ADMIN] Upload de documento iniciado", {
       requestId,
@@ -45,7 +73,8 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       fileSize: req.file.size,
     });
 
-    // Salva o PDF fisicamente em storage/documents/ para suporte a reprocessamento seguro
+    // Salva o PDF fisicamente em storage/documents/ como fallback local.
+    // O armazenamento persistente oficial é o Supabase Storage.
     try {
       const storageDir = path.join(process.cwd(), "storage", "documents");
       await fs.mkdir(storageDir, { recursive: true });
@@ -56,7 +85,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       logger.warn(`[ADMIN] Erro ao salvar arquivo PDF físico: ${fsErr.message || fsErr}`);
     }
 
-    // Resolve or find pre-registered document ID first
+    // Resolve ou encontra documento pré-registrado primeiro.
     if (!documentId) {
       const { data: existingDoc } = await supabase
         .from("knowledge_documents")
@@ -68,10 +97,12 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       }
     }
 
-    // 1. Salvar o arquivo PDF no Supabase Storage, bucket documents
+    // 1. Garantir bucket e salvar o PDF no Supabase Storage.
     let savedPath = "";
     try {
       const bucketName = "documents";
+      await ensureDocumentsBucket();
+
       const { data: storageData, error: storageErr } = await supabase.storage
         .from(bucketName)
         .upload(fileName, req.file.buffer, {
@@ -88,7 +119,6 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
     } catch (storageErr: any) {
       logger.error(`[UPLOAD] Erro ao salvar arquivo no Supabase Storage: ${storageErr.message || storageErr}`);
 
-      // Transition existing or pre-registered document status to INDEXAÇÃO_INVÁLIDA
       if (documentId) {
         await supabase
           .from("knowledge_documents")
@@ -98,7 +128,6 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
           })
           .eq("id", documentId);
       } else {
-        // Create document record with status INDEXAÇÃO_INVÁLIDA
         await supabase
           .from("knowledge_documents")
           .insert({
@@ -110,7 +139,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       throw new Error(`Falha ao salvar no Supabase Storage: ${storageErr.message || storageErr}`);
     }
 
-    // 2. Gravar esse caminho em knowledge_documents.storage_path e marcar como PROCESSANDO
+    // 2. Gravar caminho em knowledge_documents.storage_path e marcar como PROCESSANDO.
     if (documentId) {
       await supabase
         .from("knowledge_documents")
@@ -152,26 +181,21 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       }
     }
 
-    // 3. Somente então iniciar o processamento/indexação
+    // 3. Somente então iniciar o processamento/indexação.
     let text = "";
     let chunks: string[] = [];
     const embeddings: number[][] = [];
 
     try {
-      // Parsing robusto de PDF com limpeza e formatação de marcações
       text = await readPdf(req.file.buffer);
-
-      // Fatiamento inteligente em chunks com conhecimento semântico e tracking de página
       chunks = createChunks(text);
 
       console.log(`[UPLOAD] Gerando ${chunks.length} embeddings para o documento: ${req.file.originalname}`);
 
-      // Geração de embeddings com suporte a validação, retentativas e cache interno de duplicatas
       for (const chunk of chunks) {
         embeddings.push(await createEmbedding(chunk));
       }
     } catch (processError: any) {
-      // If error occurs during parsing, chunking or embedding generation, transition status to INDEXAÇÃO_INVÁLIDA
       if (documentId) {
         await supabase
           .from("knowledge_documents")
@@ -187,7 +211,6 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       throw processError;
     }
 
-    // Salvamento unificado com deduplicação de vetores e injeção de metadados
     const savedDocId = await saveKnowledge(
       req.file.originalname,
       chunks,
@@ -205,7 +228,6 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       chunksCount: chunks.length,
     });
 
-    // Record successful indexing history
     await indexingHistoryService.record({
       document: fileName,
       date: new Date().toISOString(),
@@ -232,7 +254,6 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
       filename: fileName,
     });
 
-    // Record failed indexing history
     await indexingHistoryService.record({
       document: fileName,
       date: new Date().toISOString(),
