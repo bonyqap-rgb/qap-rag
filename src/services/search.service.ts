@@ -274,6 +274,96 @@ export interface SearchResultItem {
 
 export class SearchService {
   /**
+   * Executes deterministic exact-match retrieval directly against knowledge_chunks
+   * for literal article queries, bypassing RRF when an exact match is found.
+   */
+  private static async executeDeterministicArticleSearch(
+    queryText: string,
+    requestedArticleNumber: string,
+    activeDocumentIdFilters: string[] | null,
+    documentNamesMap: Map<string, string>
+  ): Promise<SearchResultItem[]> {
+    try {
+      let query = supabase
+        .from("knowledge_chunks")
+        .select("id, document_id, chunk_index, content")
+        .or(`content.ilike.%Art. ${requestedArticleNumber}%,content.ilike.%Artigo ${requestedArticleNumber}%,content.ilike.%Art ${requestedArticleNumber}%`)
+        .limit(50);
+
+      if (activeDocumentIdFilters !== null) {
+        if (activeDocumentIdFilters.length === 1) {
+          query = query.eq("document_id", activeDocumentIdFilters[0]);
+        } else {
+          query = query.in("document_id", activeDocumentIdFilters);
+        }
+      }
+
+      const { data, error } = await query;
+      let candidateRows = (data && !error) ? data : [];
+
+      if (candidateRows.length === 0) {
+        let fallbackQuery = supabase
+          .from("knowledge_chunks")
+          .select("id, document_id, chunk_index, content")
+          .ilike("content", `%Art%${requestedArticleNumber}%`)
+          .limit(50);
+
+        if (activeDocumentIdFilters !== null) {
+          if (activeDocumentIdFilters.length === 1) {
+            fallbackQuery = fallbackQuery.eq("document_id", activeDocumentIdFilters[0]);
+          } else {
+            fallbackQuery = fallbackQuery.in("document_id", activeDocumentIdFilters);
+          }
+        }
+
+        const fallbackRes = await fallbackQuery;
+        if (fallbackRes.data && !fallbackRes.error) {
+          candidateRows = fallbackRes.data;
+        }
+      }
+
+      const results: SearchResultItem[] = [];
+
+      for (const item of candidateRows) {
+        const rawContent = item.content || "";
+        const exactArticleText = extractRequestedArticleText(rawContent, requestedArticleNumber);
+
+        if (exactArticleText) {
+          const docId = item.document_id || "unknown";
+          const filename = documentNamesMap.get(docId) || "Desconhecido";
+
+          let score = 1.0;
+          if (isDocumentExplicitlyMentioned(queryText, filename)) {
+            score += EXPLICIT_DOC_BOOST;
+          }
+
+          results.push({
+            documentId: docId,
+            chunkIndex: item.chunk_index ?? 0,
+            score,
+            text: exactArticleText,
+            metadata: {
+              sourceDocument: filename,
+              originalScore: score,
+              vectorScore: score,
+              lexicalScore: score,
+              reasons: [`Deterministic exact match for Article ${requestedArticleNumber}`],
+            },
+          });
+        }
+      }
+
+      // Sort by score descending so explicitly requested document comes first
+      results.sort((a, b) => b.score - a.score);
+
+      return results;
+    } catch (err: any) {
+      console.warn(`[SEARCH] Busca determinística para artigo ${requestedArticleNumber} falhou: ${err.message || err}`);
+      return [];
+    }
+  }
+
+  /**
    * Performs hybrid search combining semantic search (pgvector) and lexical search
    * (Postgres Full Text Search using websearch_to_tsquery).
    *
@@ -307,6 +397,51 @@ export class SearchService {
       activeDocumentIdFilters = filters.documentIds;
     }
 
+    const isTest = process.env.SUPABASE_SERVICE_ROLE_KEY === "dummy_key";
+
+    // 3. Fetch active documents from knowledge_documents for ID-to-filename mapping
+    const documentNamesMap = new Map<string, string>();
+    if (!isTest) {
+      try {
+        const { data: matchedDocs, error: docError } = await supabase
+          .from("knowledge_documents")
+          .select("id, file_name");
+        if (!docError && matchedDocs) {
+          for (const d of matchedDocs) {
+            documentNamesMap.set(d.id, d.file_name || "Desconhecido");
+          }
+        }
+      } catch (err) {
+        console.warn(`[SEARCH] Erro ao carregar nomes de documentos:`, err);
+      }
+    }
+
+    // Check if query is a literal article request with an article number
+    const isLiteral = isLiteralArticleRequest(queryText);
+    const requestedArticleNumber = isLiteral ? extractRequestedArticleNumber(queryText) : null;
+
+    // DETERMINISTIC SEARCH BYPASS FOR LITERAL ARTICLE REQUESTS
+    if (isLiteral && requestedArticleNumber) {
+      const deterministicResults = await SearchService.executeDeterministicArticleSearch(
+        queryText,
+        requestedArticleNumber,
+        activeDocumentIdFilters,
+        documentNamesMap
+      );
+
+      if (deterministicResults.length > 0) {
+        console.log(`[SEARCH] Busca determinística para Artigo ${requestedArticleNumber} encontrou ${deterministicResults.length} resultado(s). Retornando diretamente (bypass do RRF).`);
+        const limited = deterministicResults.slice(0, topK);
+        const durationMs = performance.now() - startTime;
+        const avgScore = limited.reduce((sum, r) => sum + r.score, 0) / limited.length;
+        const consultedDocIds = Array.from(new Set(limited.map((r) => r.documentId)));
+        this.logSearch(durationMs, limited.length, avgScore, consultedDocIds);
+        return limited;
+      }
+
+      console.log(`[SEARCH] Busca determinística para Artigo ${requestedArticleNumber} não encontrou nenhum trecho exato no banco. Executando busca vetorial/lexical de fallback...`);
+    }
+
     // 2. Generate embedding for query text (leverages caching and retries internally)
     const embeddingStart = performance.now();
     const embedding = await createEmbedding(queryText);
@@ -329,7 +464,6 @@ export class SearchService {
 
     // [DIAGNOSTIC LOGS] Contagem de registros na tabela knowledge_chunks antes da busca
     let totalRecordCount = 0;
-    const isTest = process.env.SUPABASE_SERVICE_ROLE_KEY === "dummy_key";
     if (!isTest) {
       try {
         const { count, error: countError } = await supabase
@@ -347,23 +481,6 @@ export class SearchService {
       console.log(`[SEARCH] Ambiente de teste detectado, pulando contagem de registros em knowledge_chunks.`);
     }
     console.log(`[SEARCH] Registros na tabela 'knowledge_chunks' antes de executar a busca: ${totalRecordCount}`);
-
-    // 3. Fetch active documents from knowledge_documents for ID-to-filename mapping
-    const documentNamesMap = new Map<string, string>();
-    if (!isTest) {
-      try {
-        const { data: matchedDocs, error: docError } = await supabase
-          .from("knowledge_documents")
-          .select("id, file_name");
-        if (!docError && matchedDocs) {
-          for (const d of matchedDocs) {
-            documentNamesMap.set(d.id, d.file_name || "Desconhecido");
-          }
-        }
-      } catch (err) {
-        console.warn(`[SEARCH] Erro ao carregar nomes de documentos:`, err);
-      }
-    }
 
     // 4. Parallel Execution of Vector and Lexical searches to minimize latency
     const rawLimit = Math.max(topK * 6, 60);
@@ -435,74 +552,6 @@ export class SearchService {
       }
     };
 
-    // Check if query is a literal article request with an article number
-    const isLiteral = isLiteralArticleRequest(queryText);
-    const requestedArticleNumber = isLiteral ? extractRequestedArticleNumber(queryText) : null;
-
-    // Helper to run Deterministic Article search on knowledge_chunks
-    const runDeterministicArticleSearch = async (): Promise<any[]> => {
-      if (!isLiteral || !requestedArticleNumber) return [];
-
-      try {
-        console.log(`[SEARCH] Executando busca determinística para artigo ${requestedArticleNumber}...`);
-        let query = supabase
-          .from("knowledge_chunks")
-          .select("id, document_id, chunk_index, content")
-          .or(`content.ilike.%Art. ${requestedArticleNumber}%,content.ilike.%Artigo ${requestedArticleNumber}%,content.ilike.%Art ${requestedArticleNumber}%`)
-          .limit(20);
-
-        if (activeDocumentIdFilters !== null) {
-          if (activeDocumentIdFilters.length === 1) {
-            query = query.eq("document_id", activeDocumentIdFilters[0]);
-          } else {
-            query = query.in("document_id", activeDocumentIdFilters);
-          }
-        }
-
-        const { data, error } = await query;
-        let candidateRows = (data && !error) ? data : [];
-
-        if (candidateRows.length === 0) {
-          // If .or ilike failed or returned empty, try broad ilike fallback
-          let fallbackQuery = supabase
-            .from("knowledge_chunks")
-            .select("id, document_id, chunk_index, content")
-            .ilike("content", `%Art%${requestedArticleNumber}%`)
-            .limit(20);
-
-          if (activeDocumentIdFilters !== null) {
-            if (activeDocumentIdFilters.length === 1) {
-              fallbackQuery = fallbackQuery.eq("document_id", activeDocumentIdFilters[0]);
-            } else {
-              fallbackQuery = fallbackQuery.in("document_id", activeDocumentIdFilters);
-            }
-          }
-
-          const fallbackRes = await fallbackQuery;
-          if (fallbackRes.data && !fallbackRes.error) {
-            candidateRows = fallbackRes.data;
-          }
-        }
-
-        const matchedItems: any[] = [];
-        for (const item of candidateRows) {
-          const rawContent = item.content || "";
-          const exactArticleText = extractRequestedArticleText(rawContent, requestedArticleNumber);
-          if (exactArticleText) {
-            matchedItems.push({
-              ...item,
-              content: exactArticleText,
-            });
-          }
-        }
-
-        return matchedItems;
-      } catch (err: any) {
-        console.warn(`[SEARCH] Busca determinística para artigo ${requestedArticleNumber} falhou: ${err.message || err}`);
-        return [];
-      }
-    };
-
     // Helper to run Lexical search with fallback
     const runLexicalSearch = async () => {
       const rpcParams: any = {
@@ -559,13 +608,12 @@ export class SearchService {
       }
     };
 
-    // 4.3. Run vector, lexical, and deterministic searches in parallel
-    console.log(`[SEARCH] Executando busca vetorial, busca lexical e busca determinística em paralelo...`);
+    // 4.3. Run vector and lexical searches in parallel
+    console.log(`[SEARCH] Executando busca vetorial e busca lexical em paralelo...`);
     const parallelStart = performance.now();
-    const [vectorRes, lexicalRes, deterministicRes] = await Promise.allSettled([
+    const [vectorRes, lexicalRes] = await Promise.allSettled([
       runVectorSearch(),
       runLexicalSearch(),
-      runDeterministicArticleSearch(),
     ]);
     const parallelDuration = performance.now() - parallelStart;
 
@@ -668,24 +716,6 @@ export class SearchService {
       } catch (fallbackErr: any) {
         console.warn(`[SEARCH] Fallback lexical falhou: ${fallbackErr.message || fallbackErr}. Prosseguindo apenas com busca vetorial.`);
       }
-    }
-
-    // 4.6. Merge Deterministic Article Search results into Lexical candidates before RRF fusion
-    if (
-      deterministicRes.status === "fulfilled" &&
-      Array.isArray(deterministicRes.value) &&
-      deterministicRes.value.length > 0
-    ) {
-      const deterministicItems = deterministicRes.value.map((item: any) => ({
-        id: item.id || `det-${item.document_id}-${item.chunk_index}`,
-        document_id: item.document_id,
-        chunk_index: item.chunk_index ?? 0,
-        content: item.content || "",
-        similarity: 0.99,
-      }));
-
-      console.log(`[SEARCH] Encontrados ${deterministicItems.length} chunks determinísticos para o artigo ${requestedArticleNumber}. Inserindo nos candidatos antes da fusão RRF.`);
-      rawLexicalResults = [...deterministicItems, ...rawLexicalResults];
     }
 
     // 5. Fusion of Results using Reciprocal Rank Fusion (RRF) (PR 5)

@@ -234,39 +234,255 @@ test("SearchService - Deterministic Article Retrieval: Artigo 1 search does NOT 
   }
 });
 
-test("Exact Article Matching - Art. 1º vs Art. 10º, Art. 11º, Art. 19º rejection rules", () => {
-  // Art. 1 requested -> MUST NEVER match Art. 10, Art. 11, Art. 19
-  assert.strictEqual(
-    isChunkMatchingArticle("[PAGE:1] Art. 10º Não há crime sem lei anterior que o defina.", "1"),
-    false
-  );
-  assert.strictEqual(
-    isChunkMatchingArticle("[PAGE:1] Art. 11º A lei posterior que de qualquer modo favorecer...", "1"),
-    false
-  );
-  assert.strictEqual(
-    isChunkMatchingArticle("[PAGE:1] Art. 19º As transgressões disciplinares no regulamento...", "1"),
-    false
-  );
+test("Mandatory Test A & B - 'Qual é o texto do artigo 1º do Código Penal Militar?' with candidates containing Art. 10º, Art. 11º, Art. 1º, Art. 19º", async () => {
+  const originalRpc = supabase.rpc;
+  const originalFrom = supabase.from;
 
-  // Art. 10 requested -> MUST NEVER match Art. 1
-  assert.strictEqual(
-    isChunkMatchingArticle("[PAGE:1] Art. 1º O Código Penal Militar divide-se em...", "10"),
-    false
-  );
+  // Vector RPC returns non-matching articles
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      return {
+        data: [
+          {
+            document_id: "doc-cpm",
+            chunk_index: 10,
+            content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:2] Art. 10º Não há crime sem lei anterior que o defina. Não há pena sem prévia cominação legal.",
+            similarity: 0.95,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    if (fnName === "match_knowledge_chunks_lexical") {
+      return { data: [], error: null } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
 
-  // Art. 1 requested -> MUST match Art. 1º and extract exact segment
-  assert.strictEqual(
-    isChunkMatchingArticle("[PAGE:1] Art. 1º O Código Penal Militar divide-se em...", "1"),
-    true
-  );
-  assert.strictEqual(
-    extractRequestedArticleText(
-      "[PAGE:1] Art. 10º Não há crime sem lei anterior. Art. 1º O Código Penal Militar divide-se em Parte Geral. Art. 2º Ninguém pode...",
-      "1"
-    ),
-    "Art. 1º O Código Penal Militar divide-se em Parte Geral."
-  );
+  supabase.from = function (table: string) {
+    if (table === "knowledge_chunks") {
+      const mockChain: any = {
+        select: () => mockChain,
+        or: () => mockChain,
+        ilike: () => mockChain,
+        eq: () => mockChain,
+        in: () => mockChain,
+        limit: () => mockChain,
+        then: (resolve: any) =>
+          resolve({
+            data: [
+              {
+                id: "chunk-art10",
+                document_id: "doc-cpm",
+                chunk_index: 10,
+                content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:2] Art. 10º Não há crime sem lei anterior que o defina. Não há pena sem prévia cominação legal.",
+              },
+              {
+                id: "chunk-art11",
+                document_id: "doc-cpm",
+                chunk_index: 11,
+                content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:2] Art. 11º A lei posterior que de qualquer modo favorecer o agente aplica-se retroativamente.",
+              },
+              {
+                id: "chunk-art1",
+                document_id: "doc-cpm",
+                chunk_index: 1,
+                content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:1] Art. 1º O Código Penal Militar divide-se em Parte Geral e Parte Especial. Art. 2º Ninguém pode ser punido por fato que lei posterior deixa de considerar crime.",
+              },
+              {
+                id: "chunk-art19",
+                document_id: "doc-cpm",
+                chunk_index: 19,
+                content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:3] Art. 19º Consideram-se crimes militares os previstos neste Código.",
+              },
+            ],
+            error: null,
+          }),
+      };
+      return mockChain;
+    }
+    return originalFrom.call(supabase, table as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Qual é o texto do artigo 1º do Código Penal Militar?", 5, 0.15);
+
+    assert.strictEqual(results.length, 1);
+    // Result MUST be exclusively Art. 1º segment!
+    assert.strictEqual(results[0].text, "Art. 1º O Código Penal Militar divide-se em Parte Geral e Parte Especial.");
+    assert.strictEqual(results[0].text.includes("Art. 10º"), false);
+    assert.strictEqual(results[0].text.includes("Art. 11º"), false);
+    assert.strictEqual(results[0].text.includes("Art. 19º"), false);
+    assert.strictEqual(results[0].text.includes("Art. 2º"), false);
+  } finally {
+    supabase.rpc = originalRpc;
+    supabase.from = originalFrom;
+  }
+});
+
+test("Mandatory Test C - DB containing only Art. 10º, Art. 11º, Art. 19º returns empty for Art. 1º query", async () => {
+  const originalRpc = supabase.rpc;
+  const originalFrom = supabase.from;
+
+  supabase.rpc = function (fnName: string) {
+    return { data: [], error: null } as any;
+  } as any;
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_chunks") {
+      const mockChain: any = {
+        select: () => mockChain,
+        or: () => mockChain,
+        ilike: () => mockChain,
+        eq: () => mockChain,
+        in: () => mockChain,
+        limit: () => mockChain,
+        then: (resolve: any) =>
+          resolve({
+            data: [
+              {
+                id: "chunk-art10",
+                document_id: "doc-cpm",
+                chunk_index: 10,
+                content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:2] Art. 10º Não há crime sem lei anterior...",
+              },
+              {
+                id: "chunk-art11",
+                document_id: "doc-cpm",
+                chunk_index: 11,
+                content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:2] Art. 11º A lei posterior...",
+              },
+              {
+                id: "chunk-art19",
+                document_id: "doc-cpm",
+                chunk_index: 19,
+                content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:3] Art. 19º Consideram-se crimes...",
+              },
+            ],
+            error: null,
+          }),
+      };
+      return mockChain;
+    }
+    return originalFrom.call(supabase, table as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Qual é o texto do artigo 1º do Código Penal Militar?", 5, 0.15);
+
+    // None of 10, 11, 19 can be considered Art 1 -> results MUST be empty
+    assert.strictEqual(results.length, 0);
+  } finally {
+    supabase.rpc = originalRpc;
+    supabase.from = originalFrom;
+  }
+});
+
+test("Mandatory Test D & E - Art. 9º and Art. 10º queries return exclusively their exact article segments", async () => {
+  const originalRpc = supabase.rpc;
+  const originalFrom = supabase.from;
+
+  supabase.rpc = function (fnName: string) {
+    return { data: [], error: null } as any;
+  } as any;
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_chunks") {
+      const mockChain: any = {
+        select: () => mockChain,
+        or: () => mockChain,
+        ilike: () => mockChain,
+        eq: () => mockChain,
+        in: () => mockChain,
+        limit: () => mockChain,
+        then: (resolve: any) =>
+          resolve({
+            data: [
+              {
+                id: "chunk-art9",
+                document_id: "doc-cpm",
+                chunk_index: 9,
+                content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:2] Artigo 9º Consideram-se crimes militares em tempo de paz. Artigo 10º Consideram-se crimes militares em tempo de guerra.",
+              },
+            ],
+            error: null,
+          }),
+      };
+      return mockChain;
+    }
+    return originalFrom.call(supabase, table as any);
+  } as any;
+
+  try {
+    // Query for Artigo 9º
+    const res9 = await SearchService.search("Qual o texto do Artigo 9º do CPM?", 5, 0.15);
+    assert.strictEqual(res9.length, 1);
+    assert.strictEqual(res9[0].text, "Artigo 9º Consideram-se crimes militares em tempo de paz.");
+
+    // Query for Artigo 10º
+    const res10 = await SearchService.search("Qual o texto do Art. 10 do CPM?", 5, 0.15);
+    assert.strictEqual(res10.length, 1);
+    assert.strictEqual(res10[0].text, "Artigo 10º Consideram-se crimes militares em tempo de guerra.");
+  } finally {
+    supabase.rpc = originalRpc;
+    supabase.from = originalFrom;
+  }
+});
+
+test("Mandatory Test F - Art. 1º NEVER matches Art. 10º, Art. 11º, Art. 12º, Art. 19º, Art. 100º", () => {
+  const requested = "1";
+
+  assert.strictEqual(isChunkMatchingArticle("Art. 10º Não há crime sem lei anterior.", requested), false);
+  assert.strictEqual(isChunkMatchingArticle("Art. 11º A lei posterior favorece.", requested), false);
+  assert.strictEqual(isChunkMatchingArticle("Art. 12º As penas do CPM.", requested), false);
+  assert.strictEqual(isChunkMatchingArticle("Art. 19º As transgressões disciplinares.", requested), false);
+  assert.strictEqual(isChunkMatchingArticle("Art. 100º Da reabilitação.", requested), false);
+
+  assert.strictEqual(extractRequestedArticleText("Art. 10º Não há crime.", requested), null);
+  assert.strictEqual(extractRequestedArticleText("Art. 11º A lei posterior.", requested), null);
+  assert.strictEqual(extractRequestedArticleText("Art. 12º As penas.", requested), null);
+});
+
+test("Mandatory Test G - Explanatory query 'Explique o artigo 10º do Código Penal Militar' uses standard hybrid/RRF flow", async () => {
+  const originalRpc = supabase.rpc;
+  const originalFrom = supabase.from;
+
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      return {
+        data: [
+          {
+            document_id: "doc-explanation",
+            chunk_index: 0,
+            content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_comentado.pdf\"}]\nArtigo 10. Explicação doutrinária sobre crimes militares em tempo de guerra.",
+            similarity: 0.91,
+          },
+          {
+            document_id: "doc-cpm",
+            chunk_index: 10,
+            content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:2] Art. 10º Consideram-se crimes militares em tempo de guerra...",
+            similarity: 0.85,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    if (fnName === "match_knowledge_chunks_lexical") {
+      return { data: [], error: null } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Explique o artigo 10º do Código Penal Militar", 5, 0.15);
+
+    assert.ok(results.length >= 1);
+    // Standard hybrid RRF ranking flow preserved (doc-explanation ranks #1)
+    assert.strictEqual(results[0].documentId, "doc-explanation");
+  } finally {
+    supabase.rpc = originalRpc;
+    supabase.from = originalFrom;
+  }
 });
 
 test("Real Case Test - 'Qual é o texto do artigo 1º do Código Penal Militar?' with candidates containing Art. 10º, Art. 11º and Art. 1º", async () => {
