@@ -10,30 +10,15 @@ const groq = new Groq({
   apiKey: env.GROQ_API_KEY,
 });
 
-/**
- * Performs a promise with timeout capability.
- */
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error("Operação excedeu o tempo limite de " + timeoutMs + "ms"));
     }, timeoutMs);
-
-    promise
-      .then((res) => {
-        clearTimeout(timer);
-        resolve(res);
-      })
-      .catch((err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
+    promise.then((res) => { clearTimeout(timer); resolve(res); }).catch((err) => { clearTimeout(timer); reject(err); });
   });
 }
 
-/**
- * Executes a function with exponential backoff retries for transient failures.
- */
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
   retries = env.LLM_RETRIES,
@@ -45,9 +30,7 @@ async function retryWithBackoff<T>(
       return await fn();
     } catch (error: any) {
       attempt++;
-      if (attempt >= retries) {
-        throw error;
-      }
+      if (attempt >= retries) throw error;
       const backoffDelay = delayMs * Math.pow(2, attempt - 1);
       console.warn(`[RETRY] Tentativa de Chat ${attempt} falhou. Retentando em ${backoffDelay}ms... Erro: ${error.message || error}`);
       await new Promise((resolve) => setTimeout(resolve, backoffDelay));
@@ -55,9 +38,6 @@ async function retryWithBackoff<T>(
   }
 }
 
-/**
- * Default internal implementation for chat completion.
- */
 async function defaultChatImplementation(
   question: string,
   context: string,
@@ -70,57 +50,50 @@ async function defaultChatImplementation(
     userPrompt?: string;
   } = {}
 ): Promise<string> {
-  if (!question || question.trim() === "") {
-    throw new Error("A pergunta não pode ser vazia.");
-  }
+  if (!question || question.trim() === "") throw new Error("A pergunta não pode ser vazia.");
 
   const systemPrompt = options.systemPrompt || PromptBuilderService.buildSystemPrompt();
+  const userPrompt = options.userPrompt || `CONTEXTO DE SUPORTE:\n${context || "Nenhum contexto encontrado."}\n\nPERGUNTA:\n${question}`;
 
-  const userPrompt = options.userPrompt || `CONTEXTO DE SUPORTE:
-${context || "Nenhum contexto encontrado."}
-
-PERGUNTA:
-${question}`;
-
-  let model = options.model && !options.model.includes("openai") && !options.model.includes("openrouter") ? options.model : env.DEFAULT_CHAT_MODEL;
-
-  // Generic fallback if model is not the default one or on allowed list
-  const allowedModels = [env.DEFAULT_CHAT_MODEL, "llama3-8b-8192", "llama3-70b-8192", "mixtral-8x7b-32768", "gemma2-9b-it"];
-  if (!allowedModels.includes(model)) {
-    console.warn(`[MODEL FALLBACK] Modelo '${model}' não é suportado no momento. Utilizando '${env.DEFAULT_CHAT_MODEL}' em seu lugar.`);
+  // Groq shut down the old Llama/Mixtral models used by this project.
+  // Only use the current production model or the centrally configured model.
+  const allowedModels = [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.6-27b",
+    "llama-3.3-70b-versatile",
+  ];
+  let model = options.model || env.DEFAULT_CHAT_MODEL;
+  if (!allowedModels.includes(model) || model === "llama-3.3-70b-versatile") {
+    console.warn(`[MODEL FALLBACK] Modelo '${model}' não está disponível. Utilizando '${env.DEFAULT_CHAT_MODEL}'.`);
     model = env.DEFAULT_CHAT_MODEL;
   }
+
   const temperature = options.temperature !== undefined ? options.temperature : 0;
   const timeoutLimit = options.timeout || env.LLM_TIMEOUT;
   const retryCount = options.retries !== undefined ? options.retries : env.LLM_RETRIES;
 
-  const apiCall = () =>
-    withTimeout(
-      groq.chat.completions.create({
-        model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature,
-      }),
-      timeoutLimit
-    );
+  const apiCall = () => withTimeout(
+    groq.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature,
+    }),
+    timeoutLimit
+  );
 
   const response = await groqChatCircuitBreaker.execute(() =>
     retryWithBackoff(apiCall, retryCount, env.LLM_RETRY_DELAY)
   );
 
   const answer = response.choices?.[0]?.message?.content;
-
-  if (!answer) {
-    throw new Error("O Groq retornou uma resposta vazia.");
-  }
-
+  if (!answer) throw new Error("O Groq retornou uma resposta vazia.");
   return answer.trim();
 }
 
-// Live binding/re-assignment container for tests in ESM
 let chatImplementation = defaultChatImplementation;
 
 export function setChatImplementation(fn: typeof defaultChatImplementation) {
@@ -131,9 +104,6 @@ export function resetChatImplementation() {
   chatImplementation = defaultChatImplementation;
 }
 
-/**
- * Highly configurable chat completion function interfacing with Groq.
- */
 export async function chatWithContextConfigurable(
   question: string,
   context: string,
@@ -149,18 +119,6 @@ export async function chatWithContextConfigurable(
   return chatImplementation(question, context, options);
 }
 
-/**
- * Interacts with the LLM via Groq to complete a prompt with context.
- * Strictly instructs the model to only use the retrieved context, and reference sources explicitly.
- * Backward compatible wrapper over chatWithContextConfigurable.
- *
- * @param question - The user's question
- * @param context - Formatted contextual documents with metadata tags
- * @returns The generated response string
- */
-export async function chatWithContext(
-  question: string,
-  context: string
-): Promise<string> {
+export async function chatWithContext(question: string, context: string): Promise<string> {
   return chatWithContextConfigurable(question, context);
 }
