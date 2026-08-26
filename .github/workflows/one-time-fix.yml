@@ -15,170 +15,32 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Apply exact article extraction
-        run: node <<'NODE'
-const fs = require('fs');
-const p = 'src/services/chat.service.ts';
-let s = fs.readFileSync(p, 'utf8');
+      - name: Corrigir resolução de documentos
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const files = [
+            'src/services/chat.service.ts',
+            'src/services/search.service.ts'
+          ];
 
-const fnMarker = '/**\n * Determines whether retrieved text represents a partial article excerpt.\n */';
-const fn = String.raw`/**
- * Extracts exactly one requested article from a literal source string.
- * The returned value is a direct slice of the original string: no trim,
- * normalization, whitespace rewriting, or LLM processing is performed.
- */
-export function extractRequestedArticleText(text: string, articleNumber: number): string | null {
-  if (typeof text !== "string" || !Number.isInteger(articleNumber) || articleNumber < 0) return null;
-
-  // A header must start at the beginning of a line. Accepted forms:
-  // Artigo 23 / Art. 23 / Art 23 / 23º / 23°.
-  const headerRe = /(^|\\n)([ \\t]*)(?:(?:Artigo|Art\\.?|Art)[ \\t]+(\\d+)(?:º|°)?|(\\d+)(?:º|°))(?=[ \\t]*(?:$|[.:\\-–—\\s]))/gim;
-  let requestedStart = -1;
-  let requestedEnd = text.length;
-  let match;
-
-  while ((match = headerRe.exec(text)) !== null) {
-    const foundNumber = Number(match[3] ?? match[4]);
-    const headerStart = match.index + match[1].length + match[2].length;
-    if (foundNumber === articleNumber) {
-      requestedStart = headerStart;
-      break;
-    }
-  }
-
-  if (requestedStart < 0) return null;
-
-  headerRe.lastIndex = requestedStart + 1;
-  while ((match = headerRe.exec(text)) !== null) {
-    const candidateStart = match.index + match[1].length + match[2].length;
-    if (candidateStart > requestedStart) {
-      requestedEnd = candidateStart;
-      break;
-    }
-  }
-
-  return text.slice(requestedStart, requestedEnd);
-}
-
-`;
-if (!s.includes('export function extractRequestedArticleText')) {
-  if (!s.includes(fnMarker)) throw new Error('Insertion marker not found');
-  s = s.replace(fnMarker, fn + fnMarker);
-}
-
-const bypassStart = '    // Direct Article Transcription Bypass (No LLM generation for literal requests)';
-const bypassEnd = '    const systemPrompt = PromptBuilderService.buildSystemPrompt();';
-const start = s.indexOf(bypassStart);
-const end = start >= 0 ? s.indexOf(bypassEnd, start) : -1;
-if (start < 0 || end < 0) throw new Error('Article bypass block markers not found');
-
-const block = String.raw`    // Direct Article Transcription Bypass (No LLM generation for literal requests)
-    if (isLiteralArticleRequest(question)) {
-      const generationStartTime = performance.now();
-      const articleMatch = question.match(/(?:artigo|art\\.?)[ \\t]*(\\d+)|\\b(\\d+)(?:º|°)\\b/i);
-      const articleNumber = articleMatch ? Number(articleMatch[1] ?? articleMatch[2]) : null;
-
-      const docGroupedTexts: Record<string, string> = {};
-      const sortedChunks = [...finalUsedChunks].sort((a, b) => a.chunkIndex - b.chunkIndex);
-      for (const chunk of sortedChunks) {
-        const docName = docMap.get(chunk.documentId) || chunk.documentName || "Desconhecido";
-        docGroupedTexts[docName] = (docGroupedTexts[docName] ?? "") + chunk.text;
-      }
-
-      const sources: ChatSource[] = finalUsedChunks.map((c) => ({
-        documentId: c.documentId,
-        filename: docMap.get(c.documentId) || c.documentName || "Desconhecido",
-        chunkIndex: c.chunkIndex,
-        score: c.score !== undefined ? parseFloat(c.score.toFixed(4)) : 0,
-      }));
-
-      if (articleNumber === null) {
-        const overallDuration = performance.now() - overallStartTime;
-        return {
-          answer: "Não foi possível identificar o número do artigo solicitado na pergunta.",
-          sources,
-          metadata: {
-            searchTime: `${searchTimeMs.toFixed(0)}ms`,
-            generationTime: "0ms",
-            totalTime: `${overallDuration.toFixed(0)}ms`,
-          },
-        };
-      }
-
-      const responseParts: string[] = [];
-      const isMultiDoc = Object.keys(docGroupedTexts).length > 1;
-
-      for (const [docName, combinedText] of Object.entries(docGroupedTexts)) {
-        const exactText = extractRequestedArticleText(combinedText, articleNumber);
-        if (exactText === null) continue;
-        const header = isMultiDoc ? `**${docName}**\\n` : "";
-        responseParts.push(`${header}${exactText}`);
-      }
-
-      const overallDuration = performance.now() - overallStartTime;
-      const generationTimeMs = performance.now() - generationStartTime;
-
-      if (responseParts.length === 0) {
-        return {
-          answer: `Não encontrei o artigo ${articleNumber} na base de conhecimento.`,
-          sources,
-          metadata: {
-            searchTime: `${searchTimeMs.toFixed(0)}ms`,
-            generationTime: `${generationTimeMs.toFixed(0)}ms`,
-            totalTime: `${overallDuration.toFixed(0)}ms`,
-          },
-        };
-      }
-
-      const directAnswer = responseParts.join("\\n\\n---\\n\\n");
-      logger.info("Fluxo de Chat RAG concluído via transcrição direta (sem LLM)", {
-        searchTimeMs: parseFloat(searchTimeMs.toFixed(2)),
-        generationTimeMs: parseFloat(generationTimeMs.toFixed(2)),
-        totalTimeMs: parseFloat(overallDuration.toFixed(2)),
-        documentsCount: new Set(sources.map((source) => source.documentId)).size,
-        chunksCount: sources.length,
-        articleNumber,
-      });
-
-      return {
-        answer: directAnswer,
-        sources,
-        metadata: {
-          searchTime: `${searchTimeMs.toFixed(0)}ms`,
-          generationTime: `${generationTimeMs.toFixed(0)}ms`,
-          totalTime: `${overallDuration.toFixed(0)}ms`,
-        },
-      };
-    }
-
-`;
-s = s.slice(0, start) + block + s.slice(end);
-fs.writeFileSync(p, s);
-NODE
-      - name: Add focused unit tests
-        run: node <<'NODE'
-const fs = require('fs');
-const p = 'src/services/chat.service.test.ts';
-let s = fs.readFileSync(p, 'utf8');
-if (!s.includes('extractRequestedArticleText preserves exact source slice')) {
-  const importLine = s.match(/^import .*from ["']\.\/chat\.service\.js["'];$/m);
-  if (!importLine) throw new Error('chat.service test import not found');
-  const updatedImport = importLine[0].includes('extractRequestedArticleText')
-    ? importLine[0]
-    : importLine[0].replace(/\}\s*from/, ', extractRequestedArticleText } from');
-  s = s.replace(importLine[0], updatedImport);
-  const test = `\n\ntest("extractRequestedArticleText preserves exact source slice", () => {\n  const source = "Art. 22. Primeiro artigo.  \\n\\nArtigo 23. Texto do artigo 23.\\n  Parágrafo único.\\n\\nArt. 24. Próximo artigo.";\n  assert.strictEqual(extractRequestedArticleText(source, 23), "Artigo 23. Texto do artigo 23.\\n  Parágrafo único.\\n\\n");\n  assert.strictEqual(extractRequestedArticleText(source, 22), "Art. 22. Primeiro artigo.  \\n\\n");\n  assert.strictEqual(extractRequestedArticleText(source, 24), "Art. 24. Próximo artigo.");\n  assert.strictEqual(extractRequestedArticleText(source, 99), null);\n});\n`;
-  s += test;
-  fs.writeFileSync(p, s);
-}
-NODE
-      - name: Test and build
-        run: npm test && npm run build
-      - name: Commit result and remove temporary workflows
+          for (const p of files) {
+            let s = fs.readFileSync(p, 'utf8');
+            if (!s.includes('"penal"')) {
+              const marker = '  "policiais",';
+              if (!s.includes(marker)) throw new Error(`Marcador não encontrado em ${p}`);
+              s = s.replace(marker, `${marker}\n  "penal",`);
+            }
+            fs.writeFileSync(p, s);
+          }
+          NODE
+      - name: Validar build
+        run: npm run build
+      - name: Commit e remover workflow temporário
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm -f .github/workflows/one-time-fix.yml .github/workflows/inspect-chat.yml
-          git add src/services/chat.service.ts src/services/chat.service.test.ts .github/workflows/one-time-fix.yml .github/workflows/inspect-chat.yml
-          git commit -m "fix: isolar artigo literal sem alterar texto original"
+          git add src/services/chat.service.ts src/services/search.service.ts .github/workflows/one-time-fix.yml .github/workflows/inspect-chat.yml
+          git commit -m "fix: impedir resolução por palavra genérica penal"
           git push origin main
