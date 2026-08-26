@@ -1,3 +1,4 @@
+# one-time reapply: document resolution
 name: one-time-fix
 on:
   push:
