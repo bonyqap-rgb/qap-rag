@@ -14,6 +14,9 @@ import healthRouter from "./api/health.js";
 import metricsRouter from "./api/metrics.js";
 import adminRouter from "./api/admin.js";
 
+// Strict document resolver must load before requests reach /chat.
+import "./services/document-resolver-override.js";
+
 // Middlewares
 import { requestLogger } from "./middlewares/request-logger.middleware.js";
 import { chatRateLimiter, searchRateLimiter, indexRateLimiter } from "./middlewares/rate-limit.middleware.js";
