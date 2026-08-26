@@ -381,6 +381,63 @@ export class SearchService {
       }
     };
 
+    // Check if query is a literal article request with an article number
+    const isLiteral = isLiteralArticleRequest(queryText);
+    const requestedArticleNumber = isLiteral ? extractRequestedArticleNumber(queryText) : null;
+
+    // Helper to run Deterministic Article search on knowledge_chunks
+    const runDeterministicArticleSearch = async (): Promise<any[]> => {
+      if (!isLiteral || !requestedArticleNumber) return [];
+
+      try {
+        console.log(`[SEARCH] Executando busca determinística para artigo ${requestedArticleNumber}...`);
+        let query = supabase
+          .from("knowledge_chunks")
+          .select("id, document_id, chunk_index, content")
+          .or(`content.ilike.%Art. ${requestedArticleNumber}%,content.ilike.%Artigo ${requestedArticleNumber}%,content.ilike.%Art ${requestedArticleNumber}%`)
+          .limit(20);
+
+        if (activeDocumentIdFilters !== null) {
+          if (activeDocumentIdFilters.length === 1) {
+            query = query.eq("document_id", activeDocumentIdFilters[0]);
+          } else {
+            query = query.in("document_id", activeDocumentIdFilters);
+          }
+        }
+
+        const { data, error } = await query;
+        if (error || !data || data.length === 0) {
+          // If .or ilike failed or returned empty, try broad ilike fallback
+          let fallbackQuery = supabase
+            .from("knowledge_chunks")
+            .select("id, document_id, chunk_index, content")
+            .ilike("content", `%Art%${requestedArticleNumber}%`)
+            .limit(20);
+
+          if (activeDocumentIdFilters !== null) {
+            if (activeDocumentIdFilters.length === 1) {
+              fallbackQuery = fallbackQuery.eq("document_id", activeDocumentIdFilters[0]);
+            } else {
+              fallbackQuery = fallbackQuery.in("document_id", activeDocumentIdFilters);
+            }
+          }
+
+          const fallbackRes = await fallbackQuery;
+          if (fallbackRes.error || !fallbackRes.data) return [];
+          return fallbackRes.data.filter((item: any) =>
+            isChunkMatchingArticle(item.content || "", requestedArticleNumber)
+          );
+        }
+
+        return data.filter((item: any) =>
+          isChunkMatchingArticle(item.content || "", requestedArticleNumber)
+        );
+      } catch (err: any) {
+        console.warn(`[SEARCH] Busca determinística para artigo ${requestedArticleNumber} falhou: ${err.message || err}`);
+        return [];
+      }
+    };
+
     // Helper to run Lexical search with fallback
     const runLexicalSearch = async () => {
       const rpcParams: any = {
@@ -437,12 +494,13 @@ export class SearchService {
       }
     };
 
-    // 4.3. Run both parallelly using Promise.allSettled
-    console.log(`[SEARCH] Executando busca vetorial e busca lexical em paralelo...`);
+    // 4.3. Run vector, lexical, and deterministic searches in parallel
+    console.log(`[SEARCH] Executando busca vetorial, busca lexical e busca determinística em paralelo...`);
     const parallelStart = performance.now();
-    const [vectorRes, lexicalRes] = await Promise.allSettled([
+    const [vectorRes, lexicalRes, deterministicRes] = await Promise.allSettled([
       runVectorSearch(),
       runLexicalSearch(),
+      runDeterministicArticleSearch(),
     ]);
     const parallelDuration = performance.now() - parallelStart;
 
@@ -545,6 +603,24 @@ export class SearchService {
       } catch (fallbackErr: any) {
         console.warn(`[SEARCH] Fallback lexical falhou: ${fallbackErr.message || fallbackErr}. Prosseguindo apenas com busca vetorial.`);
       }
+    }
+
+    // 4.6. Merge Deterministic Article Search results into Lexical candidates before RRF fusion
+    if (
+      deterministicRes.status === "fulfilled" &&
+      Array.isArray(deterministicRes.value) &&
+      deterministicRes.value.length > 0
+    ) {
+      const deterministicItems = deterministicRes.value.map((item: any) => ({
+        id: item.id || `det-${item.document_id}-${item.chunk_index}`,
+        document_id: item.document_id,
+        chunk_index: item.chunk_index ?? 0,
+        content: item.content || "",
+        similarity: 0.99,
+      }));
+
+      console.log(`[SEARCH] Encontrados ${deterministicItems.length} chunks determinísticos para o artigo ${requestedArticleNumber}. Inserindo nos candidatos antes da fusão RRF.`);
+      rawLexicalResults = [...deterministicItems, ...rawLexicalResults];
     }
 
     // 5. Fusion of Results using Reciprocal Rank Fusion (RRF) (PR 5)

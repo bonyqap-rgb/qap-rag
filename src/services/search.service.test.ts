@@ -109,6 +109,129 @@ test("SearchService - search successfully with results sorted by score", async (
   }
 });
 
+test("SearchService - Deterministic Article Retrieval: locates requested Artigo 1 when vector RPC returns only Artigo 9 and Artigo 10", async () => {
+  const originalRpc = supabase.rpc;
+  const originalFrom = supabase.from;
+
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      // Vector RPC returns ONLY Artigo 9 and Artigo 10 (Artigo 1 is missing!)
+      return {
+        data: [
+          {
+            document_id: "doc-cpm",
+            chunk_index: 8,
+            content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:3] Artigo 9º Consideram-se crimes militares em tempo de paz...",
+            similarity: 0.90,
+          },
+          {
+            document_id: "doc-cpm",
+            chunk_index: 9,
+            content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:3] Art. 10. Consideram-se crimes militares em tempo de guerra...",
+            similarity: 0.85,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    if (fnName === "match_knowledge_chunks_lexical") {
+      return { data: [], error: null } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_chunks") {
+      const mockChain: any = {
+        select: () => mockChain,
+        or: () => mockChain,
+        ilike: () => mockChain,
+        eq: () => mockChain,
+        in: () => mockChain,
+        limit: () => mockChain,
+        then: (resolve: any) =>
+          resolve({
+            data: [
+              {
+                id: "chunk-art1",
+                document_id: "doc-cpm",
+                chunk_index: 0,
+                content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:1] Art. 1º O Código Penal Militar divide-se em Parte Geral e Parte Especial.",
+              },
+            ],
+            error: null,
+          }),
+      };
+      return mockChain;
+    }
+    return originalFrom.call(supabase, table as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Qual é o texto do artigo 1º do Código Penal Militar?", 5, 0.15);
+
+    assert.ok(results.length >= 1);
+    // Artigo 1 MUST be retrieved deterministically and ranked #1
+    assert.strictEqual(results[0].text.includes("Art. 1º"), true);
+    assert.strictEqual(results[0].text.includes("Artigo 9º"), false);
+  } finally {
+    supabase.rpc = originalRpc;
+    supabase.from = originalFrom;
+  }
+});
+
+test("SearchService - Deterministic Article Retrieval: Artigo 1 search does NOT match or return Artigo 10", async () => {
+  const originalRpc = supabase.rpc;
+  const originalFrom = supabase.from;
+
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      return { data: [], error: null } as any;
+    }
+    if (fnName === "match_knowledge_chunks_lexical") {
+      return { data: [], error: null } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_chunks") {
+      const mockChain: any = {
+        select: () => mockChain,
+        or: () => mockChain,
+        ilike: () => mockChain,
+        eq: () => mockChain,
+        in: () => mockChain,
+        limit: () => mockChain,
+        then: (resolve: any) =>
+          resolve({
+            data: [
+              {
+                id: "chunk-art10",
+                document_id: "doc-cpm",
+                chunk_index: 10,
+                content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:2] Art. 10. Consideram-se crimes militares em tempo de guerra...",
+              },
+            ],
+            error: null,
+          }),
+      };
+      return mockChain;
+    }
+    return originalFrom.call(supabase, table as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Qual é o texto do artigo 1º do Código Penal Militar?", 5, 0.15);
+
+    // Searching for Artigo 1 must NOT match Artigo 10, so results should be empty
+    assert.strictEqual(results.length, 0);
+  } finally {
+    supabase.rpc = originalRpc;
+    supabase.from = originalFrom;
+  }
+});
+
 test("Literal Article Matching - helper logic extractRequestedArticleNumber and isChunkMatchingArticle", () => {
   // extractRequestedArticleNumber
   assert.strictEqual(extractRequestedArticleNumber("Qual é o texto do artigo 1º do Código Penal Militar?"), "1");
