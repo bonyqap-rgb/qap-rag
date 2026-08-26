@@ -17,6 +17,23 @@ const upload = multer({
 });
 
 /**
+ * Converte o nome original em uma chave ASCII segura para o Supabase Storage.
+ * O nome original continua sendo preservado em `file_name` e na interface.
+ */
+function sanitizeStorageFileName(fileName: string): string {
+  const extension = path.extname(fileName).toLowerCase();
+  const baseName = path.basename(fileName, path.extname(fileName));
+  const normalized = baseName.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const safeBase = normalized
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^[_\-.]+|[_\-.]+$/g, "")
+    .slice(0, 240);
+
+  return `${safeBase || "documento"}${extension || ".pdf"}`;
+}
+
+/**
  * Garante que o bucket persistente de documentos exista antes do upload.
  * Isso evita o erro 500 quando o ambiente Supabase foi criado sem o bucket.
  */
@@ -105,11 +122,16 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
     let savedPath = "";
     try {
       const bucketName = "documents";
+      const storageFileName = sanitizeStorageFileName(fileName);
       await ensureDocumentsBucket();
+
+      if (storageFileName !== fileName) {
+        logger.info(`[UPLOAD] Nome do arquivo sanitizado para o Storage: ${fileName} -> ${storageFileName}`);
+      }
 
       const { data: storageData, error: storageErr } = await supabase.storage
         .from(bucketName)
-        .upload(fileName, req.file.buffer, {
+        .upload(storageFileName, req.file.buffer, {
           contentType: "application/pdf",
           upsert: true,
         });
@@ -118,7 +140,7 @@ router.post("/", upload.single("file"), async (req: Request, res: Response, next
         throw storageErr;
       }
 
-      savedPath = storageData?.path ? `documents/${storageData.path}` : `documents/${fileName}`;
+      savedPath = storageData?.path ? `documents/${storageData.path}` : `documents/${storageFileName}`;
       logger.info(`[UPLOAD] PDF salvo com sucesso no Supabase Storage: ${savedPath}`);
     } catch (storageErr: any) {
       logger.error(`[UPLOAD] Erro ao salvar arquivo no Supabase Storage: ${storageErr.message || storageErr}`);
