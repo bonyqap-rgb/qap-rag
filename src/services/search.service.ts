@@ -3,46 +3,6 @@ import { env } from "../config/env.js";
 import { createEmbedding } from "../groq/embed.js";
 import { logger } from "./logger.service.js";
 import { metricsService } from "./metrics.service.js";
-import { isLiteralArticleRequest } from "./chat.service.js";
-
-/**
- * Extracts the requested article number from a user query if present.
- * Examples:
- * - "Qual é o texto do artigo 1º do Código Penal Militar?" -> "1"
- * - "Qual o conteúdo do Artigo 9º do CPM?" -> "9"
- * - "O que diz o Art. 10?" -> "10"
- * - "Transcreva o art 11" -> "11"
- */
-export function extractRequestedArticleNumber(queryText: string): string | null {
-  if (!queryText || typeof queryText !== "string") return null;
-
-  const match = queryText.match(/(?:artigo|art\.?)\s*(\d+(?:-[a-z\d]+)?)(?:[º°o]|\b)/i);
-  if (match && match[1]) {
-    return match[1];
-  }
-  return null;
-}
-
-/**
- * Checks if a chunk's text matches the exact requested article number.
- * Ensures strict boundary checking so that "Art. 1º" does NOT match "Art. 10", "Art. 11", etc.
- * Properly considers the optional "[PAGE:x]" prefix existing in chunks.
- */
-export function isChunkMatchingArticle(
-  chunkText: string,
-  requestedArticleNumber: string
-): boolean {
-  if (!chunkText || typeof chunkText !== "string" || !requestedArticleNumber) return false;
-
-  const escapedN = requestedArticleNumber.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
-
-  const pattern = new RegExp(
-    `(?:^|\\[PAGE:\\d+\\]\\s*|\\b)(?:Artigo|Art\\.?)\\s*${escapedN}(?:[º°o]|\\b)(?!\\d)`,
-    "i"
-  );
-
-  return pattern.test(chunkText);
-}
 
 // Configurable constants for Hybrid Search (PR 4)
 export const HYBRID_VECTOR_WEIGHT = 0.7;
@@ -381,63 +341,6 @@ export class SearchService {
       }
     };
 
-    // Check if query is a literal article request with an article number
-    const isLiteral = isLiteralArticleRequest(queryText);
-    const requestedArticleNumber = isLiteral ? extractRequestedArticleNumber(queryText) : null;
-
-    // Helper to run Deterministic Article search on knowledge_chunks
-    const runDeterministicArticleSearch = async (): Promise<any[]> => {
-      if (!isLiteral || !requestedArticleNumber) return [];
-
-      try {
-        console.log(`[SEARCH] Executando busca determinística para artigo ${requestedArticleNumber}...`);
-        let query = supabase
-          .from("knowledge_chunks")
-          .select("id, document_id, chunk_index, content")
-          .or(`content.ilike.%Art. ${requestedArticleNumber}%,content.ilike.%Artigo ${requestedArticleNumber}%,content.ilike.%Art ${requestedArticleNumber}%`)
-          .limit(20);
-
-        if (activeDocumentIdFilters !== null) {
-          if (activeDocumentIdFilters.length === 1) {
-            query = query.eq("document_id", activeDocumentIdFilters[0]);
-          } else {
-            query = query.in("document_id", activeDocumentIdFilters);
-          }
-        }
-
-        const { data, error } = await query;
-        if (error || !data || data.length === 0) {
-          // If .or ilike failed or returned empty, try broad ilike fallback
-          let fallbackQuery = supabase
-            .from("knowledge_chunks")
-            .select("id, document_id, chunk_index, content")
-            .ilike("content", `%Art%${requestedArticleNumber}%`)
-            .limit(20);
-
-          if (activeDocumentIdFilters !== null) {
-            if (activeDocumentIdFilters.length === 1) {
-              fallbackQuery = fallbackQuery.eq("document_id", activeDocumentIdFilters[0]);
-            } else {
-              fallbackQuery = fallbackQuery.in("document_id", activeDocumentIdFilters);
-            }
-          }
-
-          const fallbackRes = await fallbackQuery;
-          if (fallbackRes.error || !fallbackRes.data) return [];
-          return fallbackRes.data.filter((item: any) =>
-            isChunkMatchingArticle(item.content || "", requestedArticleNumber)
-          );
-        }
-
-        return data.filter((item: any) =>
-          isChunkMatchingArticle(item.content || "", requestedArticleNumber)
-        );
-      } catch (err: any) {
-        console.warn(`[SEARCH] Busca determinística para artigo ${requestedArticleNumber} falhou: ${err.message || err}`);
-        return [];
-      }
-    };
-
     // Helper to run Lexical search with fallback
     const runLexicalSearch = async () => {
       const rpcParams: any = {
@@ -494,13 +397,12 @@ export class SearchService {
       }
     };
 
-    // 4.3. Run vector, lexical, and deterministic searches in parallel
-    console.log(`[SEARCH] Executando busca vetorial, busca lexical e busca determinística em paralelo...`);
+    // 4.3. Run both parallelly using Promise.allSettled
+    console.log(`[SEARCH] Executando busca vetorial e busca lexical em paralelo...`);
     const parallelStart = performance.now();
-    const [vectorRes, lexicalRes, deterministicRes] = await Promise.allSettled([
+    const [vectorRes, lexicalRes] = await Promise.allSettled([
       runVectorSearch(),
       runLexicalSearch(),
-      runDeterministicArticleSearch(),
     ]);
     const parallelDuration = performance.now() - parallelStart;
 
@@ -603,24 +505,6 @@ export class SearchService {
       } catch (fallbackErr: any) {
         console.warn(`[SEARCH] Fallback lexical falhou: ${fallbackErr.message || fallbackErr}. Prosseguindo apenas com busca vetorial.`);
       }
-    }
-
-    // 4.6. Merge Deterministic Article Search results into Lexical candidates before RRF fusion
-    if (
-      deterministicRes.status === "fulfilled" &&
-      Array.isArray(deterministicRes.value) &&
-      deterministicRes.value.length > 0
-    ) {
-      const deterministicItems = deterministicRes.value.map((item: any) => ({
-        id: item.id || `det-${item.document_id}-${item.chunk_index}`,
-        document_id: item.document_id,
-        chunk_index: item.chunk_index ?? 0,
-        content: item.content || "",
-        similarity: 0.99,
-      }));
-
-      console.log(`[SEARCH] Encontrados ${deterministicItems.length} chunks determinísticos para o artigo ${requestedArticleNumber}. Inserindo nos candidatos antes da fusão RRF.`);
-      rawLexicalResults = [...deterministicItems, ...rawLexicalResults];
     }
 
     // 5. Fusion of Results using Reciprocal Rank Fusion (RRF) (PR 5)
@@ -852,7 +736,7 @@ export class SearchService {
     // 6. Greedy Document Diversity Re-ranking using DIVERSITY_PENALTY_FACTOR
     const rrfDuration = performance.now() - rrfStart;
     const diversityStart = performance.now();
-    let dynamicResults: SearchResultItem[] = [];
+    const dynamicResults: SearchResultItem[] = [];
     const docCounts = new Map<string, number>();
 
     // Sort by composite final score descending first
@@ -879,23 +763,6 @@ export class SearchService {
 
     // Sort results by score descending again
     dynamicResults.sort((a, b) => b.score - a.score);
-
-    // Literal Article Request Prioritization
-    if (isLiteralArticleRequest(queryText)) {
-      const requestedArticleNumber = extractRequestedArticleNumber(queryText);
-      if (requestedArticleNumber) {
-        const matchingChunks = dynamicResults.filter((r) =>
-          isChunkMatchingArticle(r.text, requestedArticleNumber)
-        );
-        const nonMatchingChunks = dynamicResults.filter(
-          (r) => !isChunkMatchingArticle(r.text, requestedArticleNumber)
-        );
-
-        if (matchingChunks.length > 0) {
-          dynamicResults = [...matchingChunks, ...nonMatchingChunks];
-        }
-      }
-    }
 
     // Limit output results strictly to topK
     const uniqueResults = dynamicResults.slice(0, topK);

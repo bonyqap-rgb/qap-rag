@@ -28,8 +28,6 @@ function createMockSupabase(mockData: any, mockError: any = null): SupabaseClien
 const mockDbDocument = {
   id: "8c77be02-4ee3-455b-80df-67993a4bc4d4",
   file_name: "manual_pm.pdf",
-  file_size: 1024,
-  status: "INDEXADO",
   created_at: "2023-10-10T12:00:00Z",
   updated_at: "2023-10-10T12:00:00Z"
 };
