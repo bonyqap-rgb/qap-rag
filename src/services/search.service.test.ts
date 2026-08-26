@@ -7,7 +7,9 @@ import { supabase } from "../config/supabase.js";
 import {
   SearchService,
   extractRequestedArticleNumber,
+  extractRequestedArticleText,
   isChunkMatchingArticle,
+  parseArticleHeaders,
 } from "./search.service.js";
 import { ContextBuilderService } from "./context-builder.service.js";
 
@@ -226,6 +228,119 @@ test("SearchService - Deterministic Article Retrieval: Artigo 1 search does NOT 
 
     // Searching for Artigo 1 must NOT match Artigo 10, so results should be empty
     assert.strictEqual(results.length, 0);
+  } finally {
+    supabase.rpc = originalRpc;
+    supabase.from = originalFrom;
+  }
+});
+
+test("Exact Article Matching - Art. 1º vs Art. 10º, Art. 11º, Art. 19º rejection rules", () => {
+  // Art. 1 requested -> MUST NEVER match Art. 10, Art. 11, Art. 19
+  assert.strictEqual(
+    isChunkMatchingArticle("[PAGE:1] Art. 10º Não há crime sem lei anterior que o defina.", "1"),
+    false
+  );
+  assert.strictEqual(
+    isChunkMatchingArticle("[PAGE:1] Art. 11º A lei posterior que de qualquer modo favorecer...", "1"),
+    false
+  );
+  assert.strictEqual(
+    isChunkMatchingArticle("[PAGE:1] Art. 19º As transgressões disciplinares no regulamento...", "1"),
+    false
+  );
+
+  // Art. 10 requested -> MUST NEVER match Art. 1
+  assert.strictEqual(
+    isChunkMatchingArticle("[PAGE:1] Art. 1º O Código Penal Militar divide-se em...", "10"),
+    false
+  );
+
+  // Art. 1 requested -> MUST match Art. 1º and extract exact segment
+  assert.strictEqual(
+    isChunkMatchingArticle("[PAGE:1] Art. 1º O Código Penal Militar divide-se em...", "1"),
+    true
+  );
+  assert.strictEqual(
+    extractRequestedArticleText(
+      "[PAGE:1] Art. 10º Não há crime sem lei anterior. Art. 1º O Código Penal Militar divide-se em Parte Geral. Art. 2º Ninguém pode...",
+      "1"
+    ),
+    "Art. 1º O Código Penal Militar divide-se em Parte Geral."
+  );
+});
+
+test("Real Case Test - 'Qual é o texto do artigo 1º do Código Penal Militar?' with candidates containing Art. 10º, Art. 11º and Art. 1º", async () => {
+  const originalRpc = supabase.rpc;
+  const originalFrom = supabase.from;
+
+  supabase.rpc = function (fnName: string) {
+    if (fnName === "match_documents") {
+      // Vector RPC returns Artigo 10 and Artigo 11 (Artigo 1 is missing in vector search!)
+      return {
+        data: [
+          {
+            document_id: "doc-cpm",
+            chunk_index: 10,
+            content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:2] Art. 10º Não há crime sem lei anterior que o defina. Não há pena sem prévia cominação legal.",
+            similarity: 0.92, // high vector similarity
+          },
+          {
+            document_id: "doc-cpm",
+            chunk_index: 11,
+            content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:2] Art. 11º A lei posterior que de qualquer modo favorecer o agente aplica-se retroativamente.",
+            similarity: 0.88,
+          },
+        ],
+        error: null,
+      } as any;
+    }
+    if (fnName === "match_knowledge_chunks_lexical") {
+      return { data: [], error: null } as any;
+    }
+    return originalRpc.call(supabase, fnName as any);
+  } as any;
+
+  supabase.from = function (table: string) {
+    if (table === "knowledge_chunks") {
+      const mockChain: any = {
+        select: () => mockChain,
+        or: () => mockChain,
+        ilike: () => mockChain,
+        eq: () => mockChain,
+        in: () => mockChain,
+        limit: () => mockChain,
+        then: (resolve: any) =>
+          resolve({
+            data: [
+              {
+                id: "chunk-art10",
+                document_id: "doc-cpm",
+                chunk_index: 10,
+                content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:2] Art. 10º Não há crime sem lei anterior que o defina. Não há pena sem prévia cominação legal.",
+              },
+              {
+                id: "chunk-art1",
+                document_id: "doc-cpm",
+                chunk_index: 1,
+                content: "[METADATA:{\"sourceDocument\":\"codigo_penal_militar_cpm.pdf\"}]\n[PAGE:1] Art. 1º O Código Penal Militar divide-se em Parte Geral e Parte Especial.",
+              },
+            ],
+            error: null,
+          }),
+      };
+      return mockChain;
+    }
+    return originalFrom.call(supabase, table as any);
+  } as any;
+
+  try {
+    const results = await SearchService.search("Qual é o texto do artigo 1º do Código Penal Militar?", 5, 0.15);
+
+    assert.ok(results.length >= 1);
+    // Rank 1 MUST be Art. 1º of CPM and NOT Art. 10º or Art. 11º!
+    assert.strictEqual(results[0].text, "Art. 1º O Código Penal Militar divide-se em Parte Geral e Parte Especial.");
+    assert.strictEqual(results[0].text.includes("Art. 10º"), false);
+    assert.strictEqual(results[0].text.includes("Art. 11º"), false);
   } finally {
     supabase.rpc = originalRpc;
     supabase.from = originalFrom;

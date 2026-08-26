@@ -23,25 +23,79 @@ export function extractRequestedArticleNumber(queryText: string): string | null 
   return null;
 }
 
+export interface ArticleHeaderMatch {
+  articleNumber: string;
+  startIndex: number;
+  headerText: string;
+}
+
 /**
- * Checks if a chunk's text matches the exact requested article number.
- * Ensures strict boundary checking so that "Art. 1º" does NOT match "Art. 10", "Art. 11", etc.
- * Properly considers the optional "[PAGE:x]" prefix existing in chunks.
+ * Parses all article headers in a given text and extracts their structural article numbers.
+ */
+export function parseArticleHeaders(text: string): ArticleHeaderMatch[] {
+  if (!text || typeof text !== "string") return [];
+
+  const regex = /(?:^|\b)(Art(?:igo)?\.?)\s*(\d+(?:-[A-Za-z\d]+)?)(?:\s*[º°o]\.|\s*[º°o]|\s*\.|\s*|-|\b)/gi;
+
+  const matches: ArticleHeaderMatch[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    const fullMatch = match[0];
+    const articleNum = match[2];
+
+    const prefixOffset = fullMatch.search(/\bArt/i);
+    const startIndex = match.index + (prefixOffset >= 0 ? prefixOffset : 0);
+
+    matches.push({
+      articleNumber: articleNum,
+      startIndex,
+      headerText: fullMatch.trim(),
+    });
+  }
+
+  return matches;
+}
+
+/**
+ * Extracts ONLY the text segment belonging to the requested article number.
+ * Slices text starting at the requested article header up to the next article header (or end of text).
+ * Returns null if the requested article is not present in the text.
+ */
+export function extractRequestedArticleText(
+  text: string,
+  requestedArticleNumber: string
+): string | null {
+  if (!text || typeof text !== "string" || !requestedArticleNumber) return null;
+
+  const headers = parseArticleHeaders(text);
+  if (headers.length === 0) return null;
+
+  const targetIdx = headers.findIndex(
+    (h) => h.articleNumber.toLowerCase() === requestedArticleNumber.toLowerCase()
+  );
+
+  if (targetIdx === -1) return null;
+
+  const startPos = headers[targetIdx].startIndex;
+  const nextHeader = headers.find(
+    (h, idx) => idx > targetIdx && h.startIndex > startPos
+  );
+
+  const endPos = nextHeader ? nextHeader.startIndex : text.length;
+  const sliced = text.substring(startPos, endPos).trim();
+
+  return sliced.length > 0 ? sliced : null;
+}
+
+/**
+ * Checks if a chunk's text contains the exact requested article number.
  */
 export function isChunkMatchingArticle(
   chunkText: string,
   requestedArticleNumber: string
 ): boolean {
-  if (!chunkText || typeof chunkText !== "string" || !requestedArticleNumber) return false;
-
-  const escapedN = requestedArticleNumber.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
-
-  const pattern = new RegExp(
-    `(?:^|\\[PAGE:\\d+\\]\\s*|\\b)(?:Artigo|Art\\.?)\\s*${escapedN}(?:[º°o]|\\b)(?!\\d)`,
-    "i"
-  );
-
-  return pattern.test(chunkText);
+  return extractRequestedArticleText(chunkText, requestedArticleNumber) !== null;
 }
 
 // Configurable constants for Hybrid Search (PR 4)
@@ -406,7 +460,9 @@ export class SearchService {
         }
 
         const { data, error } = await query;
-        if (error || !data || data.length === 0) {
+        let candidateRows = (data && !error) ? data : [];
+
+        if (candidateRows.length === 0) {
           // If .or ilike failed or returned empty, try broad ilike fallback
           let fallbackQuery = supabase
             .from("knowledge_chunks")
@@ -423,15 +479,24 @@ export class SearchService {
           }
 
           const fallbackRes = await fallbackQuery;
-          if (fallbackRes.error || !fallbackRes.data) return [];
-          return fallbackRes.data.filter((item: any) =>
-            isChunkMatchingArticle(item.content || "", requestedArticleNumber)
-          );
+          if (fallbackRes.data && !fallbackRes.error) {
+            candidateRows = fallbackRes.data;
+          }
         }
 
-        return data.filter((item: any) =>
-          isChunkMatchingArticle(item.content || "", requestedArticleNumber)
-        );
+        const matchedItems: any[] = [];
+        for (const item of candidateRows) {
+          const rawContent = item.content || "";
+          const exactArticleText = extractRequestedArticleText(rawContent, requestedArticleNumber);
+          if (exactArticleText) {
+            matchedItems.push({
+              ...item,
+              content: exactArticleText,
+            });
+          }
+        }
+
+        return matchedItems;
       } catch (err: any) {
         console.warn(`[SEARCH] Busca determinística para artigo ${requestedArticleNumber} falhou: ${err.message || err}`);
         return [];
