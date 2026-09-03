@@ -8,12 +8,10 @@ const files = [
 for (const file of files) {
   let source = fs.readFileSync(file, "utf8");
 
-  // Remove penal from the generic-word whitelist if an older build added it.
   if (source.includes('  "penal",')) {
     source = source.replace(/\n\s*"penal",/g, "");
   }
 
-  // Never create document aliases from individual filename words.
   const chatSingleWordAliasBlock = /\n\s*\/\/ Also add any word in the filename[\s\S]*?\n\s*}\n\n\s*return Array\.from\(aliases\)/;
   if (chatSingleWordAliasBlock.test(source)) {
     source = source.replace(chatSingleWordAliasBlock, "\n\n  return Array.from(aliases)");
@@ -24,7 +22,6 @@ for (const file of files) {
     source = source.replace(searchSingleWordAliasBlock, "");
   }
 
-  // A document restriction is authoritative. Do not escape it with a global search.
   const fallbackBlock = /\n\s*\/\/ 4\. Fallback obrigatório:[\s\S]*?\n\s*}\n\s*}\n\s*catch \(error: any\)/;
   if (fallbackBlock.test(source)) {
     source = source.replace(
@@ -33,8 +30,7 @@ for (const file of files) {
     );
   }
 
-  // Literal article requests must return only the exact requested article segment,
-  // even if retrieval returns neighboring articles in the same chunk.
+  // Literal Article Extraction v2: isolate the requested article before building the answer.
   if (file === "src/services/chat.service.ts" && !source.includes("Literal Article Extraction v2")) {
     const literalBlock = /\n    \/\/ Direct Article Transcription Bypass \(No LLM generation for literal requests\)[\s\S]*?\n    const systemPrompt =/;
     if (literalBlock.test(source)) {
@@ -78,9 +74,9 @@ for (const file of files) {
             answer: responseText,
             sources,
             metadata: {
-              searchTime: \`${searchTimeMs.toFixed(0)}ms\`,
+              searchTime: \`\${searchTimeMs.toFixed(0)}ms\`,
               generationTime: "0ms",
-              totalTime: \`${overallDuration.toFixed(0)}ms\`,
+              totalTime: \`\${overallDuration.toFixed(0)}ms\`,
             },
           };
         }
