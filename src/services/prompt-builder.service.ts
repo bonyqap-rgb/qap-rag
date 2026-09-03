@@ -31,7 +31,8 @@ Diretrizes obrigatórias que você deve seguir rigorosamente:
 
    Comparação concluída utilizando as informações disponíveis.
 9. Nunca responda "Não encontrei essa informação na base de conhecimento." se houver pelo menos um bloco ou documento parcial contendo informações relevantes no contexto de suporte.
-10. Só recuse a responder (utilizando exatamente a frase "Não encontrei essa informação na base de conhecimento.") se absolutamente NENHUM trecho relevante contendo a informação existir no contexto fornecido.`;
+10. Só recuse a responder (utilizando exatamente a frase "Não encontrei essa informação na base de conhecimento.") se absolutamente NENHUM trecho relevante contendo a informação existir no contexto fornecido.
+11. NUNCA produza HTML na resposta. Não use tags como <br>, <p>, <div>, <b> ou similares. Use apenas texto simples e Markdown quando necessário.`;
   }
 
   /**
