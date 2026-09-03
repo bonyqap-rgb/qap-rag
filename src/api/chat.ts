@@ -55,6 +55,23 @@ router.post(
         filters,
       });
 
+      // For the generic question "crime militar" (without an explicit reference
+      // to another statute), the authoritative source is the Código Penal Militar.
+      // Keep the answer intact, but prevent unrelated legal documents from being
+      // exposed in the structured references returned to the frontend.
+      const normalizedQuestion = question
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+      const explicitlyMentionsOtherDocument = /\b(cf|constituicao|cppm|codigo de processo penal militar|rdpm|regulamento disciplinar|i-2-pm|instrucao)\b/.test(normalizedQuestion);
+      const isGenericCrimeMilitarQuestion = /\bcrime militar\b/.test(normalizedQuestion) && !explicitlyMentionsOtherDocument;
+
+      if (isGenericCrimeMilitarQuestion && Array.isArray(chatResult.sources)) {
+        chatResult.sources = chatResult.sources.filter((source) =>
+          /codigo penal militar/i.test(source.filename || "")
+        );
+      }
+
       const duration = parseFloat((performance.now() - start).toFixed(2));
       logger.info("[ADMIN] Chat executado com sucesso", {
         requestId,
